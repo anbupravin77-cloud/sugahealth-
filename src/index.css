@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #0A0A0A;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #1F1F23;
+  --color-secondary-foreground: #FFFFFF;
+  --color-accent: #0A0A0A;
+  
+  --color-background: #FAFAFA;
+  --color-surface: #F4F4F6;
+  --color-surface-hover: #ECECEE;
+  --color-foreground: #09090B;
+  --color-muted: #E4E4E7;
+  --color-muted-foreground: #71717A;
+  --color-border: #E4E4E7;
+  
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-tagline: "Cormorant Garamond", Georgia, serif;
+}
+
+@layer base {
+  :root {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html,
+  body {
+    font-family: var(--font-sans);
+    max-width: 100%;
+    overflow-x: hidden;
+    color: #18181B;
+    background-color: #FAFAFA;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-sans);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+    color: #09090B;
+  }
+
+  p {
+    font-family: var(--font-sans);
+    line-height: 1.7;
+    color: #52525B;
+  }
+
+  ::selection {
+    background-color: #18181B;
+    color: #FFFFFF;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Consistent smaller tagline under the logo */
+  .brand-tagline {
+    font-family: var(--font-tagline);
+    font-size: 0.6875rem; /* 11px */
+    line-height: 1;
+    letter-spacing: 0.22em;
+    text-transform: lowercase;
+    font-style: normal;
+    font-weight: 400;
+    display: block;
+  }
+}
+
+/* Device-safe button hover & tap animations - smooth on desktop, non-sticky on mobile */
+@media (hover: hover) and (pointer: fine) {
+  button:not(:disabled),
+  a.inline-flex:not([aria-disabled="true"]),
+  a.flex:not([aria-disabled="true"]):has(span, svg) {
+    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  /* Primary dark action buttons subtle lift */
+  button.bg-neutral-950:not(:disabled):hover,
+  a.bg-neutral-950:not([aria-disabled="true"]):hover,
+  button.bg-white:not(:disabled):hover,
+  a.bg-white:not([aria-disabled="true"]):hover {
+    transform: translateY(-1.5px);
+    box-shadow: 0 8px 24px -4px rgba(10, 10, 10, 0.18);
+  }
+
+  /* Secondary outline and neutral buttons */
+  button.border-neutral-300:not(:disabled):hover,
+  button.bg-neutral-100:not(:disabled):hover,
+  a.bg-neutral-100:hover,
+  a.border-neutral-200:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px -2px rgba(10, 10, 10, 0.08);
+  }
+}
+
+/* Responsive tactile active state */
+button:not(:disabled):active,
+a.inline-flex:active,
+a.flex:has(span, svg):active {
+  transform: scale(0.975) translateY(0);
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-marquee {
+  animation: marquee 50s linear infinite;
+  display: inline-flex;
+  min-width: 200%;
+}
