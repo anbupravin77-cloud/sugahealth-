@@ -81,11 +81,10 @@ import {
 
 import { config, validateProductionConfig } from './src/server/config';
 
-async function startServer() {
-  validateProductionConfig();
+validateProductionConfig();
 
-  const app = express();
-  const PORT = 3000;
+export const app = express();
+const PORT = 3000;
 
   app.use(express.json({ 
     limit: '15mb',
@@ -2447,24 +2446,30 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development or static serving for production
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+  // Standalone server lifecycle (for AI Studio preview & Cloud Run container)
+  if (process.env.VERCEL !== '1') {
+    if (process.env.NODE_ENV !== 'production') {
+      createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      }).then((vite) => {
+        app.use(vite.middlewares);
+        app.listen(PORT, '0.0.0.0', () => {
+          console.log(`Suga.health full-stack server running on http://0.0.0.0:${PORT}`);
+        });
+      }).catch((err) => {
+        console.error('Failed to start Vite dev server:', err);
+      });
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Suga.health full-stack server running on http://0.0.0.0:${PORT}`);
+      });
+    }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Suga.health full-stack server running on http://0.0.0.0:${PORT}`);
-  });
-}
-
-startServer();
+export default app;
