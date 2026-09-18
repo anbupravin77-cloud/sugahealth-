@@ -26,6 +26,8 @@ import DoctorMessages from './pages/doctor/DoctorMessages';
 import { ContentProvider } from './context/ContentContext';
 import { AuthProvider } from './context/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import AuthTest from './pages/AuthTest';
+import { isAuthTestEnabled } from './lib/authConfig';
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -51,6 +53,7 @@ export default function App() {
             </Route>
             {/* Auth */}
             <Route path="/login" element={<Login />} />
+            {isAuthTestEnabled() && <Route path="/auth-test" element={<AuthTest />} />}
             
             {/* Staff Onboarding */}
             <Route element={<ProtectedRoute requireOnboarding={false} />}>

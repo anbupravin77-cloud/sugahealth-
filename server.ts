@@ -6,6 +6,7 @@ import { SugaWebsiteContent } from './src/types/content';
 import { adminDb as db, adminAuth } from './src/server/firebaseAdmin';
 import { generateConsultationDocument, generatePrescriptionDocument, getDocumentStream } from './src/server/documentService';
 import { calculateOrderTotals, StripePaymentProvider } from './src/server/commerce';
+import { authRouter } from './src/server/auth/routes';
 
 interface StorageSchema {
   published: SugaWebsiteContent;
@@ -112,6 +113,9 @@ const PORT = 3000;
   app.get(['/api/health', '/health'], (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
+
+  // Supabase Auth & Test accounts layer
+  app.use('/api/auth', authRouter);
 
   // Public: Get published content
   app.get('/api/content', (req, res) => {
