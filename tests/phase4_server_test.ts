@@ -54,7 +54,8 @@ async function runServerTests() {
   const accountsRes = await fetch(`${baseUrl}/api/auth/test/accounts`);
   assert(accountsRes.status === 200, 'GET /api/auth/test/accounts returns 200 OK');
   const accountsBody = await accountsRes.json();
-  assert(accountsBody.accounts?.length === 4, '4 test accounts returned');
+  assert(Array.isArray(accountsBody.accounts), 'GET /api/auth/test/accounts returns an array of accounts');
+  assert(accountsBody.success === true, 'GET /api/auth/test/accounts returns success: true');
 
   console.log('\n==================================================');
   console.log(`SERVER INTEGRATION RESULTS: ${passed} PASSED, ${failed} FAILED`);

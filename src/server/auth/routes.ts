@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { bootstrapUserProfile } from './profileBootstrap';
-import { provisionDesignatedTestAccount, isAllowlistedTestEmail, DESIGNATED_TEST_ACCOUNTS } from './testAccounts';
+import { provisionDesignatedTestAccount, isAllowlistedTestEmail, getConfiguredTestAccounts } from './testAccounts';
 import { resetDesignatedTestAccount, isTestResetAllowed } from './testReset';
 import { authenticateRequest } from './authMiddleware';
 import { supabaseAdmin } from '../supabaseAdmin';
@@ -74,7 +74,7 @@ authRouter.post('/test/provision', async (req: Request, res: Response): Promise<
   }
 
   if (!isAllowlistedTestEmail(email)) {
-    res.status(400).json({ error: `Only allowlisted test emails (@sugahealth.test) can be provisioned. "${email}" was rejected.` });
+    res.status(400).json({ error: `Security boundary violation: Only configured test accounts can be provisioned. "${email}" was rejected.` });
     return;
   }
 
@@ -105,7 +105,7 @@ authRouter.post('/test/reset', async (req: Request, res: Response): Promise<void
   }
 
   if (!isAllowlistedTestEmail(email)) {
-    res.status(400).json({ error: `Security boundary violation: Only @sugahealth.test emails can be reset. "${email}" was rejected.` });
+    res.status(400).json({ error: `Security boundary violation: Only explicitly configured test accounts can be reset. "${email}" was rejected.` });
     return;
   }
 
@@ -127,12 +127,15 @@ authRouter.get('/test/accounts', (req: Request, res: Response): void => {
     return;
   }
 
+  const accounts = getConfiguredTestAccounts();
   res.json({
     success: true,
-    accounts: DESIGNATED_TEST_ACCOUNTS.map(a => ({
+    configured: accounts.length > 0,
+    accounts: accounts.map(a => ({
       email: a.email,
       role: a.defaultRole,
       displayName: a.displayName,
+      envVar: a.envVar,
     })),
   });
 });

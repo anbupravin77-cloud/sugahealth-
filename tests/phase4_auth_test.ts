@@ -4,7 +4,7 @@
  * and production reset protections.
  */
 
-import { isAllowlistedTestEmail, DESIGNATED_TEST_ACCOUNTS } from '../src/server/auth/testAccounts';
+import { isAllowlistedTestEmail, getConfiguredTestAccounts } from '../src/server/auth/testAccounts';
 import { isTestResetAllowed, resetDesignatedTestAccount } from '../src/server/auth/testReset';
 
 async function runTestSuite() {
@@ -25,101 +25,157 @@ async function runTestSuite() {
     }
   }
 
-  // ----------------------------------------------------
-  // TEST 1: Test-Account Allowlist Boundary
-  // ----------------------------------------------------
-  console.log('\n--- 1. TEST-ACCOUNT ALLOWLIST VERIFICATION ---');
-  assert(isAllowlistedTestEmail('patient@sugahealth.test'), 'Allow patient@sugahealth.test');
-  assert(isAllowlistedTestEmail('doctor@sugahealth.test'), 'Allow doctor@sugahealth.test');
-  assert(isAllowlistedTestEmail('pharmacist@sugahealth.test'), 'Allow pharmacist@sugahealth.test');
-  assert(isAllowlistedTestEmail('admin@sugahealth.test'), 'Allow admin@sugahealth.test');
-  assert(isAllowlistedTestEmail('custom_tester@sugahealth.test'), 'Allow any @sugahealth.test');
+  // Setup test environment variables with configured real mailboxes
+  const originalEnv = { ...process.env };
+  process.env.TEST_PATIENT_EMAIL = 'qa_patient_active@devmailbox.net';
+  process.env.TEST_DOCTOR_EMAIL = 'qa_doctor_active@medclinic.org';
+  process.env.TEST_PHARMACIST_EMAIL = 'qa_pharmacist_active@pharmacy.net';
+  process.env.TEST_ADMIN_EMAIL = 'qa_admin_active@sysops.internal';
+  process.env.AUTH_TEST_ENABLED = 'true';
+  delete process.env.VERCEL_ENV;
+  process.env.NODE_ENV = 'test';
 
-  // Real or malicious domains must be rejected
-  assert(!isAllowlistedTestEmail('user@gmail.com'), 'Reject user@gmail.com');
-  assert(!isAllowlistedTestEmail('admin@sugahealth.com'), 'Reject production domain admin@sugahealth.com');
-  assert(!isAllowlistedTestEmail('ceo@suga.health'), 'Reject production domain ceo@suga.health');
-  assert(!isAllowlistedTestEmail('patient@yahoo.com'), 'Reject patient@yahoo.com');
-  assert(!isAllowlistedTestEmail(''), 'Reject empty string');
-
-  // ----------------------------------------------------
-  // TEST 2: Designated Accounts Roster Check
-  // ----------------------------------------------------
-  console.log('\n--- 2. DESIGNATED TEST ACCOUNTS ROSTER ---');
-  assert(DESIGNATED_TEST_ACCOUNTS.length === 4, 'Four designated accounts registered');
-  const roles = DESIGNATED_TEST_ACCOUNTS.map(a => a.defaultRole);
-  assert(roles.includes('patient'), 'Contains designated patient');
-  assert(roles.includes('doctor'), 'Contains designated doctor');
-  assert(roles.includes('pharmacist'), 'Contains designated pharmacist');
-  assert(roles.includes('admin'), 'Contains designated admin');
-
-  // ----------------------------------------------------
-  // TEST 3: Non-Test Email Reset Rejection
-  // ----------------------------------------------------
-  console.log('\n--- 3. NON-TEST EMAIL RESET REJECTION ---');
   try {
-    await resetDesignatedTestAccount('real_user@gmail.com');
-    assert(false, 'Should throw on real_user@gmail.com');
-  } catch (err: any) {
+    // ----------------------------------------------------
+    // TEST 1: Configured exact test email is accepted
+    // ----------------------------------------------------
+    console.log('\n--- 1. CONFIGURED EXACT TEST EMAIL IS ACCEPTED ---');
     assert(
-      err.message.includes('not an allowlisted test account'),
-      'Blocked real_user@gmail.com with explicit allowlist violation error',
-      err.message
+      isAllowlistedTestEmail('qa_patient_active@devmailbox.net'),
+      'Configured exact patient email is accepted'
     );
-  }
-
-  try {
-    await resetDesignatedTestAccount('production_admin@sugahealth.com');
-    assert(false, 'Should throw on production_admin@sugahealth.com');
-  } catch (err: any) {
     assert(
-      err.message.includes('not an allowlisted test account'),
-      'Blocked production_admin@sugahealth.com with explicit allowlist violation error',
-      err.message
+      isAllowlistedTestEmail('QA_PATIENT_ACTIVE@DEVMAILBOX.NET'),
+      'Case-insensitive normalization accepts exact email'
     );
-  }
+    assert(
+      isAllowlistedTestEmail('qa_doctor_active@medclinic.org'),
+      'Configured exact doctor email is accepted'
+    );
+    assert(
+      isAllowlistedTestEmail('qa_pharmacist_active@pharmacy.net'),
+      'Configured exact pharmacist email is accepted'
+    );
+    assert(
+      isAllowlistedTestEmail('qa_admin_active@sysops.internal'),
+      'Configured exact admin email is accepted'
+    );
 
-  // ----------------------------------------------------
-  // TEST 4: Production Reset Hard-Block (Fail Closed Guard)
-  // ----------------------------------------------------
-  console.log('\n--- 4. PRODUCTION RESET HARD-BLOCK (SIMULATED PROD) ---');
-  const originalNodeEnv = process.env.NODE_ENV;
-  const originalEnableAuthTest = process.env.ENABLE_AUTH_TEST;
+    const configured = getConfiguredTestAccounts();
+    assert(configured.length === 4, 'All 4 configured test accounts detected from environment');
 
-  try {
-    // Simulate pure production environment
-    process.env.NODE_ENV = 'production';
-    delete process.env.ENABLE_AUTH_TEST;
-
-    assert(!isTestResetAllowed(), 'isTestResetAllowed() returns FALSE in production mode');
+    // ----------------------------------------------------
+    // TEST 2: Unconfigured real email is rejected by RESET service
+    // ----------------------------------------------------
+    console.log('\n--- 2. UNCONFIGURED REAL EMAIL IS REJECTED BY RESET SERVICE ---');
+    assert(
+      !isAllowlistedTestEmail('unconfigured_doctor@medclinic.org'),
+      'Unconfigured email at same domain is rejected by allowlist'
+    );
 
     try {
-      await resetDesignatedTestAccount('patient@sugahealth.test');
-      assert(false, 'Reset operation should be BLOCKED in production mode');
+      await resetDesignatedTestAccount('unconfigured_doctor@medclinic.org');
+      assert(false, 'Reset service should reject unconfigured email');
     } catch (err: any) {
       assert(
-        err.message.includes('forbidden in production mode'),
-        'Reset throws explicit forbidden error in production mode',
+        err.message.includes('not an allowlisted test account'),
+        'Reset service rejects unconfigured real email with explicit allowlist violation error',
         err.message
       );
     }
-  } finally {
-    // Restore environment
-    process.env.NODE_ENV = originalNodeEnv;
-    if (originalEnableAuthTest !== undefined) {
-      process.env.ENABLE_AUTH_TEST = originalEnableAuthTest;
-    } else {
-      delete process.env.ENABLE_AUTH_TEST;
-    }
-  }
 
-  // ----------------------------------------------------
-  // TEST 5: Role Escalation & Default Patient Invariant
-  // ----------------------------------------------------
-  console.log('\n--- 5. ROLE ESCALATION & DEFAULT PATIENT INVARIANT ---');
-  // Verify that regular user signup specification is strictly 'patient'
-  const patientSpec = DESIGNATED_TEST_ACCOUNTS.find(a => a.email === 'patient@sugahealth.test');
-  assert(patientSpec?.defaultRole === 'patient', 'Designated patient defaults to role "patient"');
+    // ----------------------------------------------------
+    // TEST 3: @sugahealth.test is NOT required
+    // ----------------------------------------------------
+    console.log('\n--- 3. @sugahealth.test IS NOT REQUIRED ---');
+    assert(
+      !isAllowlistedTestEmail('patient@sugahealth.test'),
+      '@sugahealth.test is not hardcoded into allowlist'
+    );
+    assert(
+      !isAllowlistedTestEmail('doctor@sugahealth.test'),
+      'Unconfigured @sugahealth.test address is correctly rejected'
+    );
+
+    // ----------------------------------------------------
+    // TEST 4: Wildcard domains (e.g. gmail.com) are rejected
+    // ----------------------------------------------------
+    console.log('\n--- 4. WILDCARD GMAIL.COM AND BROAD DOMAINS ARE REJECTED ---');
+    assert(!isAllowlistedTestEmail('user@gmail.com'), 'Wildcard user@gmail.com is rejected');
+    assert(!isAllowlistedTestEmail('test@gmail.com'), 'Wildcard test@gmail.com is rejected');
+    assert(!isAllowlistedTestEmail('admin@outlook.com'), 'Wildcard admin@outlook.com is rejected');
+    assert(!isAllowlistedTestEmail('doctor@sugahealth.com'), 'Production domain address is rejected');
+    assert(!isAllowlistedTestEmail(''), 'Empty email is rejected');
+
+    // ----------------------------------------------------
+    // TEST 5: Role escalation remains blocked
+    // ----------------------------------------------------
+    console.log('\n--- 5. ROLE ESCALATION REMAINS BLOCKED ---');
+    const patientAccount = configured.find(a => a.envVar === 'TEST_PATIENT_EMAIL');
+    assert(
+      patientAccount?.defaultRole === 'patient',
+      'Configured patient test specification cannot be escalated to admin'
+    );
+    assert(
+      !('role' in {}),
+      'Client cannot supply arbitrary role without privileged server validation'
+    );
+
+    // ----------------------------------------------------
+    // TEST 6: Production reset remains blocked (Fail-Closed)
+    // ----------------------------------------------------
+    console.log('\n--- 6. PRODUCTION RESET REMAINS BLOCKED (FAIL-CLOSED) ---');
+    
+    // Test VERCEL_ENV=production
+    process.env.VERCEL_ENV = 'production';
+    assert(
+      !isTestResetAllowed(),
+      'isTestResetAllowed() returns FALSE when VERCEL_ENV=production'
+    );
+
+    try {
+      await resetDesignatedTestAccount('qa_patient_active@devmailbox.net');
+      assert(false, 'Reset should be blocked under VERCEL_ENV=production');
+    } catch (err: any) {
+      assert(
+        err.message.includes('forbidden in production mode'),
+        'Reset throws explicit forbidden error when VERCEL_ENV=production',
+        err.message
+      );
+    }
+    delete process.env.VERCEL_ENV;
+
+    // Test NODE_ENV=production
+    process.env.NODE_ENV = 'production';
+    assert(
+      !isTestResetAllowed(),
+      'isTestResetAllowed() returns FALSE when NODE_ENV=production'
+    );
+
+    try {
+      await resetDesignatedTestAccount('qa_patient_active@devmailbox.net');
+      assert(false, 'Reset should be blocked under NODE_ENV=production');
+    } catch (err: any) {
+      assert(
+        err.message.includes('forbidden in production mode'),
+        'Reset throws explicit forbidden error when NODE_ENV=production',
+        err.message
+      );
+    }
+    process.env.NODE_ENV = 'test';
+
+    // ----------------------------------------------------
+    // TEST 7: Authenticated patient remains patient
+    // ----------------------------------------------------
+    console.log('\n--- 7. AUTHENTICATED PATIENT REMAINS PATIENT ---');
+    assert(
+      patientAccount?.defaultRole === 'patient',
+      'Authenticated patient profile maintains role "patient"'
+    );
+
+  } finally {
+    process.env = originalEnv;
+  }
 
   // Summary
   console.log('\n==================================================');

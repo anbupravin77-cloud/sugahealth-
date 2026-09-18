@@ -41,16 +41,20 @@ export default function AuthTest() {
 
   // Form states
   const [mode, setMode] = useState<'signin' | 'signup'>('signup');
-  const [email, setEmail] = useState('test_patient_1@sugahealth.test');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('Passw0rd!123456');
   const [firstName, setFirstName] = useState('Jane');
   const [lastName, setLastName] = useState('Doe');
   const [actionLoading, setActionLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
+  // Configured test accounts
+  const [configuredAccounts, setConfiguredAccounts] = useState<Array<{ email: string; role: string; displayName: string; envVar: string }>>([]);
+
   // Security test states
   const [tamperResult, setTamperResult] = useState<string | null>(null);
   const [resetResult, setResetResult] = useState<any>(null);
+  const [customResetEmail, setCustomResetEmail] = useState('');
 
   // Load active session and profile
   const syncSession = async () => {
@@ -72,6 +76,18 @@ export default function AuthTest() {
     }
   };
 
+  // Fetch configured test accounts
+  const loadConfiguredAccounts = () => {
+    fetch('/api/auth/test/accounts')
+      .then(r => r.json())
+      .then(data => {
+        if (data?.accounts) {
+          setConfiguredAccounts(data.accounts);
+        }
+      })
+      .catch(err => console.warn('[AuthTest] Failed to load test accounts:', err));
+  };
+
   useEffect(() => {
     if (!enabled) {
       navigate('/', { replace: true });
@@ -79,6 +95,7 @@ export default function AuthTest() {
     }
 
     syncSession();
+    loadConfiguredAccounts();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       setSession(newSession);
@@ -118,10 +135,17 @@ export default function AuthTest() {
         setProfile(bootstrapped);
       }
 
-      setStatusMessage({
-        type: 'success',
-        text: `Sign up completed for ${email}! User ID: ${newUser?.id || 'pending'}. Default role: ${bootstrapped?.role || 'patient'}.`,
-      });
+      if (newUser && !newSession) {
+        setStatusMessage({
+          type: 'info',
+          text: `Supabase Auth signup submitted for ${email}! Status: EMAIL CONFIRMATION REQUIRED. Supabase created the user account (ID: ${newUser.id}) and dispatched a verification email. Please check your inbox for the confirmation link to activate your session.`,
+        });
+      } else {
+        setStatusMessage({
+          type: 'success',
+          text: `Sign up completed for ${email}! User ID: ${newUser?.id || 'pending'}. Default role: ${bootstrapped?.role || 'patient'}.`,
+        });
+      }
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'Sign up failed.' });
     } finally {
@@ -456,9 +480,12 @@ export default function AuthTest() {
                   required
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="name@sugahealth.test"
+                  placeholder="real-test-email@yourdomain.com"
                   className="w-full px-3 py-2 rounded-xl border border-stone-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-400"
                 />
+                <p className="text-2xs text-stone-500 mt-1">
+                  Enter a real email mailbox you control. Supabase Auth rejects <code>.test</code> and example domains.
+                </p>
               </div>
 
               <div>
@@ -551,40 +578,80 @@ export default function AuthTest() {
                 Test G: Fresh Test-Account Purge & Reset Service
               </h3>
               <p className="text-xs text-stone-500 mt-0.5">
-                Safely purges test accounts and relational records. Protected by strict allowlist (<code>@sugahealth.test</code>) and production fail-closed guard.
+                Safely purges test accounts and relational records. Protected by strict exact-email allowlist and production fail-closed guard.
               </p>
             </div>
             <span className="text-xs font-mono px-2.5 py-1 bg-stone-100 text-stone-700 rounded-md border border-stone-200">
-              Scope: @sugahealth.test only
+              Scope: Exact Configured Mailboxes Only
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-            {[
-              { email: 'patient@sugahealth.test', role: 'patient', label: 'Patient Test' },
-              { email: 'doctor@sugahealth.test', role: 'doctor', label: 'Doctor Test' },
-              { email: 'pharmacist@sugahealth.test', role: 'pharmacist', label: 'Pharmacist Test' },
-              { email: 'admin@sugahealth.test', role: 'admin', label: 'Admin Test' },
-            ].map(acc => (
-              <div key={acc.email} className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
-                <div className="text-xs font-semibold text-stone-800">{acc.label}</div>
-                <div className="text-xs font-mono text-stone-500 truncate">{acc.email}</div>
-                <div className="flex gap-1.5 pt-1">
-                  <button
-                    onClick={() => handleQuickProvision(acc.email)}
-                    className="flex-1 py-1 px-2 bg-stone-200 hover:bg-stone-300 rounded-lg text-2xs font-medium text-stone-800 transition"
-                  >
-                    Provision
-                  </button>
-                  <button
-                    onClick={() => handleResetAccount(acc.email)}
-                    className="py-1 px-2 bg-red-100 hover:bg-red-200 text-red-800 rounded-lg text-2xs font-medium transition"
-                  >
-                    Reset (G)
-                  </button>
+          {configuredAccounts.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+              {configuredAccounts.map(acc => (
+                <div key={acc.email} className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                  <div className="text-xs font-semibold text-stone-800 flex items-center justify-between">
+                    <span>{acc.displayName}</span>
+                    <span className="text-2xs font-mono px-1.5 py-0.5 bg-stone-200 text-stone-700 rounded capitalize">{acc.role}</span>
+                  </div>
+                  <div className="text-xs font-mono text-stone-500 truncate" title={acc.email}>{acc.email}</div>
+                  <div className="text-2xs font-mono text-stone-400">{acc.envVar}</div>
+                  <div className="flex gap-1.5 pt-1">
+                    <button
+                      onClick={() => handleQuickProvision(acc.email)}
+                      disabled={actionLoading}
+                      className="flex-1 py-1 px-2 bg-stone-200 hover:bg-stone-300 rounded-lg text-2xs font-medium text-stone-800 transition disabled:opacity-50"
+                    >
+                      Provision
+                    </button>
+                    <button
+                      onClick={() => handleResetAccount(acc.email)}
+                      disabled={actionLoading}
+                      className="py-1 px-2 bg-red-100 hover:bg-red-200 text-red-800 rounded-lg text-2xs font-medium transition disabled:opacity-50"
+                    >
+                      Reset (G)
+                    </button>
+                  </div>
                 </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
+              <div className="text-xs font-semibold text-stone-800 flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5 text-stone-500" />
+                No Designated Test Mailboxes Configured in Environment
               </div>
-            ))}
+              <p className="text-xs text-stone-600">
+                To enable designated role provisioning and Test G reset operations, set environment variables with real mailboxes you control:
+              </p>
+              <div className="p-2.5 bg-white rounded-lg border border-stone-200 font-mono text-2xs text-stone-600 space-y-1">
+                <div>TEST_PATIENT_EMAIL=patient-tester@yourdomain.com</div>
+                <div>TEST_DOCTOR_EMAIL=doctor-tester@yourdomain.com</div>
+                <div>TEST_PHARMACIST_EMAIL=pharm-tester@yourdomain.com</div>
+                <div>TEST_ADMIN_EMAIL=admin-tester@yourdomain.com</div>
+              </div>
+              <p className="text-2xs text-stone-500">
+                For Test A (Fresh Signup), you do not need to configure an environment variable; simply type any real email address you control into the form above.
+              </p>
+            </div>
+          )}
+
+          {/* Direct allowlist reset trigger */}
+          <div className="pt-2 border-t border-stone-100 flex flex-wrap sm:flex-nowrap gap-2 items-center">
+            <input
+              type="email"
+              value={customResetEmail}
+              onChange={e => setCustomResetEmail(e.target.value)}
+              placeholder="Target allowlisted test email to purge..."
+              className="flex-1 px-3 py-1.5 rounded-lg border border-stone-200 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-stone-400"
+            />
+            <button
+              onClick={() => handleResetAccount(customResetEmail)}
+              disabled={!customResetEmail || actionLoading}
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-medium transition disabled:opacity-50 whitespace-nowrap"
+            >
+              Reset Target Account (G)
+            </button>
           </div>
 
           {resetResult && (

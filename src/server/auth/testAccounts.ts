@@ -5,42 +5,71 @@ export interface DesignatedTestAccount {
   email: string;
   defaultRole: UserRole;
   displayName: string;
+  envVar: string;
   specialties?: string[];
 }
 
-export const DESIGNATED_TEST_ACCOUNTS: ReadonlyArray<DesignatedTestAccount> = [
-  {
-    email: 'patient@sugahealth.test',
-    defaultRole: 'patient',
-    displayName: 'Test Patient',
-  },
-  {
-    email: 'doctor@sugahealth.test',
-    defaultRole: 'doctor',
-    displayName: 'Dr. Sarah Test MD',
-    specialties: ['General Medicine', 'Telehealth Consultation'],
-  },
-  {
-    email: 'pharmacist@sugahealth.test',
-    defaultRole: 'pharmacist',
-    displayName: 'Marcus Test RPh',
-  },
-  {
-    email: 'admin@sugahealth.test',
-    defaultRole: 'admin',
-    displayName: 'Suga System Admin Tester',
-  },
-];
+/**
+ * Returns the exact allowlisted test accounts configured in environment variables.
+ * Each must be a real mailbox controlled by the developer/test owner.
+ * Never hardcodes arbitrary real customer emails into source code.
+ */
+export function getConfiguredTestAccounts(): DesignatedTestAccount[] {
+  const accounts: DesignatedTestAccount[] = [];
 
-const ALLOWED_TEST_DOMAINS = ['@sugahealth.test'];
+  if (process.env.TEST_PATIENT_EMAIL && process.env.TEST_PATIENT_EMAIL.trim()) {
+    accounts.push({
+      email: process.env.TEST_PATIENT_EMAIL.trim().toLowerCase(),
+      defaultRole: 'patient',
+      displayName: 'Designated Test Patient',
+      envVar: 'TEST_PATIENT_EMAIL',
+    });
+  }
+
+  if (process.env.TEST_DOCTOR_EMAIL && process.env.TEST_DOCTOR_EMAIL.trim()) {
+    accounts.push({
+      email: process.env.TEST_DOCTOR_EMAIL.trim().toLowerCase(),
+      defaultRole: 'doctor',
+      displayName: 'Dr. Test Physician MD',
+      envVar: 'TEST_DOCTOR_EMAIL',
+      specialties: ['General Medicine', 'Telehealth Consultation'],
+    });
+  }
+
+  if (process.env.TEST_PHARMACIST_EMAIL && process.env.TEST_PHARMACIST_EMAIL.trim()) {
+    accounts.push({
+      email: process.env.TEST_PHARMACIST_EMAIL.trim().toLowerCase(),
+      defaultRole: 'pharmacist',
+      displayName: 'Marcus Test RPh',
+      envVar: 'TEST_PHARMACIST_EMAIL',
+    });
+  }
+
+  if (process.env.TEST_ADMIN_EMAIL && process.env.TEST_ADMIN_EMAIL.trim()) {
+    accounts.push({
+      email: process.env.TEST_ADMIN_EMAIL.trim().toLowerCase(),
+      defaultRole: 'admin',
+      displayName: 'Suga System Admin Tester',
+      envVar: 'TEST_ADMIN_EMAIL',
+    });
+  }
+
+  return accounts;
+}
 
 /**
- * Validates whether an email falls strictly within the test-account boundary.
+ * Validates whether an email exactly matches one of the explicitly configured test accounts.
+ *
+ * CRITICAL SECURITY INVARIANTS:
+ * - NO wildcard domains (e.g. gmail.com, outlook.com, sugahealth.test).
+ * - NO arbitrary user emails.
+ * - MUST match an exact configured test address.
  */
 export function isAllowlistedTestEmail(email: string): boolean {
   if (!email || typeof email !== 'string') return false;
   const normalized = email.trim().toLowerCase();
-  return ALLOWED_TEST_DOMAINS.some(domain => normalized.endsWith(domain));
+  const configured = getConfiguredTestAccounts();
+  return configured.some(acc => acc.email === normalized);
 }
 
 /**
@@ -52,14 +81,15 @@ export async function provisionDesignatedTestAccount(email: string, password: st
   const normalizedEmail = email.trim().toLowerCase();
 
   if (!isAllowlistedTestEmail(normalizedEmail)) {
-    throw new Error(`Email "${normalizedEmail}" is not an allowlisted test account. Only @sugahealth.test addresses are allowed.`);
+    throw new Error(
+      `Email "${normalizedEmail}" is not an explicitly configured test account. Only configured test addresses (TEST_PATIENT_EMAIL, TEST_DOCTOR_EMAIL, etc.) can be provisioned.`
+    );
   }
 
-  const spec = DESIGNATED_TEST_ACCOUNTS.find(a => a.email === normalizedEmail) || {
-    email: normalizedEmail,
-    defaultRole: 'patient' as UserRole,
-    displayName: 'Test User',
-  };
+  const spec = getConfiguredTestAccounts().find(a => a.email === normalizedEmail);
+  if (!spec) {
+    throw new Error(`No designated test specification found for "${normalizedEmail}".`);
+  }
 
   // 1. Check if user already exists in Supabase Auth
   const { data: userList, error: listError } = await supabaseAdmin.auth.admin.listUsers();

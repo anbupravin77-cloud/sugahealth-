@@ -96,6 +96,10 @@ import { config, validateProductionConfig } from './src/server/config';
 
 validateProductionConfig();
 
+if (process.env.NODE_ENV !== 'production' && !process.env.AUTH_TEST_ENABLED) {
+  process.env.AUTH_TEST_ENABLED = 'true';
+}
+
 export const app = express();
 const PORT = 3000;
 

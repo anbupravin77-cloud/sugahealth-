@@ -17,14 +17,47 @@ export interface ResetResult {
 }
 
 /**
+ * Detects whether the current runtime environment is a production deployment.
+ * Inspects multiple platform environment signals (Vercel, Cloud Run, standard NODE_ENV).
+ */
+export function isProductionDeployment(): boolean {
+  if (process.env.VERCEL_ENV === 'production') return true;
+  if (process.env.APP_ENV === 'production') return true;
+  if (process.env.ENVIRONMENT === 'production') return true;
+  if (process.env.NODE_ENV === 'production') return true;
+  return false;
+}
+
+/**
+ * Checks whether the explicit auth test feature flag is enabled.
+ */
+export function isAuthTestEnabled(): boolean {
+  return (
+    process.env.AUTH_TEST_ENABLED === 'true' ||
+    process.env.ENABLE_AUTH_TEST === 'true'
+  );
+}
+
+/**
  * Checks if the execution environment permits destructive test-account reset operations.
- * Fails closed in production unless explicit ENABLE_AUTH_TEST override is configured for staging.
+ *
+ * CRITICAL FAIL-CLOSED GUARDS:
+ * 1. MUST NOT be a production deployment (isProductionDeployment() === true => BLOCKED).
+ * 2. MUST have explicit AUTH_TEST_ENABLED='true' or ENABLE_AUTH_TEST='true'.
+ *
+ * The production Suga.Health deployment must NOT expose a working destructive reset operation.
  */
 export function isTestResetAllowed(): boolean {
-  // If explicitly disabled or in standard production without explicit auth test flag, reject
-  if (process.env.NODE_ENV === 'production' && process.env.ENABLE_AUTH_TEST !== 'true') {
+  // Guard 1: Hard block in production deployment
+  if (isProductionDeployment()) {
     return false;
   }
+
+  // Guard 2: Explicit flag required in development/staging
+  if (!isAuthTestEnabled()) {
+    return false;
+  }
+
   return true;
 }
 
@@ -33,7 +66,7 @@ export function isTestResetAllowed(): boolean {
  *
  * CRITICAL SECURITY INVARIANTS:
  * 1. Fails closed in production.
- * 2. ONLY operates on emails matching allowlist: `@sugahealth.test`.
+ * 2. ONLY operates on exact emails matching configured test accounts (TEST_PATIENT_EMAIL, etc.).
  * 3. Never deletes all users or arbitrary users.
  * 4. Removes only test application records tied to the specific test user ID.
  * 5. Uses server-side admin client; credentials never reach the browser.
@@ -46,9 +79,11 @@ export async function resetDesignatedTestAccount(email: string): Promise<ResetRe
     throw new Error('Test reset operation is strictly forbidden in production mode.');
   }
 
-  // Guard 2: Strict allowlist check
+  // Guard 2: Strict exact-email allowlist check
   if (!isAllowlistedTestEmail(normalizedEmail)) {
-    throw new Error(`Email "${normalizedEmail}" is not an allowlisted test account. Real email addresses cannot be reset by this service.`);
+    throw new Error(
+      `Email "${normalizedEmail}" is not an allowlisted test account. Only configured test addresses (TEST_PATIENT_EMAIL, TEST_DOCTOR_EMAIL, etc.) can be reset by this service.`
+    );
   }
 
   // Step 1: Identify Auth user in Supabase
