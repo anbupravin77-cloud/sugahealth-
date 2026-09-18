@@ -1,4 +1,3 @@
-import { getFirestore } from 'firebase-admin/firestore';
 import { generateConsultationPdfBuffer, generatePrescriptionPdfBuffer } from './pdfGenerator';
 import { uploadPdf, downloadPdf } from './storageHelper';
 import { v4 as uuidv4 } from 'uuid';

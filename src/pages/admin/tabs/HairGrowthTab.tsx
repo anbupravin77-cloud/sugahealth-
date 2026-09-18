@@ -1,5 +1,6 @@
 import { HairGrowthPageContent } from '../../../types/content';
 import { ImageUploadField } from '../ImageUploadField';
+import { Plus, Trash2 } from 'lucide-react';
 
 interface HairGrowthTabProps {
   data: HairGrowthPageContent;
@@ -11,10 +12,17 @@ export function HairGrowthTab(props: HairGrowthTabProps) {
   const onChange = props?.onChange || (() => {});
 
   const addPillar = () => {
-    onChange({ ...data, pillars: [...data.pillars, { title: 'New Pillar', desc: 'Desc', icon: 'Star' }] });
+    const num = `0${(data.pillars?.length || 0) + 1}`;
+    onChange({
+      ...data,
+      pillars: [
+        ...(data.pillars || []),
+        { num, tag: 'FOLLICULAR', title: 'New Biological Pillar', desc: 'Clinical explanation of hair growth mechanism.' }
+      ]
+    });
   };
   const removePillar = (idx: number) => {
-    onChange({ ...data, pillars: data.pillars.filter((_, i) => i !== idx) });
+    onChange({ ...data, pillars: (data.pillars || []).filter((_, i) => i !== idx) });
   };
   const addGrowthCycle = () => {
     onChange({ ...data, growthCycle: [...data.growthCycle, { phase: 'New Phase', time: 'Time', desc: 'Desc' }] });
@@ -105,10 +113,32 @@ export function HairGrowthTab(props: HairGrowthTabProps) {
 
       {/* Pillars */}
       <div className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-4">
-        <h3 className="font-sans text-base font-bold text-neutral-950">Core Biological Pillars</h3>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-sans text-base font-bold text-neutral-950">Core Biological Pillars</h3>
+            <p className="text-xs text-neutral-500">Key physiological pillars supporting hair regeneration.</p>
+          </div>
+          <button
+            type="button"
+            onClick={addPillar}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+          >
+            <Plus size={14} /> Add Pillar
+          </button>
+        </div>
         {data.pillars.map((pil, idx) => (
           <div key={idx} className="p-4 rounded-xl bg-neutral-50 border border-neutral-200 space-y-3">
-            <span className="text-xs font-bold text-neutral-500 uppercase">Pillar {pil.num}</span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-neutral-500 uppercase">Pillar {pil.num}</span>
+              <button
+                type="button"
+                onClick={() => removePillar(idx)}
+                className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                title="Remove pillar"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">Tag Pill</label>

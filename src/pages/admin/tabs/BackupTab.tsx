@@ -58,13 +58,21 @@ export function BackupTab(props: BackupTabProps) {
     };
   };
 
-  const handleReset = () => {
-    if (true) {
+  const handleReset = async () => {
+    const confirmed = window.confirm(
+      "Are you sure you want to reset all content to master factory defaults? This will overwrite your draft."
+    );
+    if (!confirmed) return;
+
+    try {
       if (onResetToDefault) {
-        onResetToDefault();
+        await onResetToDefault();
       }
       setSuccessMsg('Website content draft reset to initial defaults.');
       setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to reset content');
+      setTimeout(() => setErrorMsg(null), 5000);
     }
   };
 

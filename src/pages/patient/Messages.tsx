@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../lib/firebase';
-import { collection, query, where, orderBy, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { Loader2, MessageSquare, ShieldCheck } from 'lucide-react';
 import MessageThread from '../../components/MessageThread';
 
@@ -23,19 +23,30 @@ export default function Messages() {
     const unsub = onSnapshot(q, async (snap) => {
       const fetchedThreads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       
-      // Fetch doctor names for the threads
-      const threadsWithDocs = await Promise.all(fetchedThreads.map(async (t: any) => {
-        if (!t.doctorId) return t;
-        const docSnap = await getDocs(query(collection(db, 'staff_profiles'), where('uid', '==', t.doctorId)));
-        if (!docSnap.empty) {
-          const docData = docSnap.docs[0].data();
-          return { ...t, doctorName: `${docData.firstName} ${docData.lastName}` };
-        }
-        return t;
-      }));
-      
-      setThreads(threadsWithDocs);
-      setLoading(false);
+      // Fetch doctor names for the threads via secure participant endpoint
+      try {
+        const token = await user.getIdToken();
+        const threadsWithDocs = await Promise.all(fetchedThreads.map(async (t: any) => {
+          if (!t.doctorId) return t;
+          try {
+            const res = await fetch(`/api/messaging/participant/${t.doctorId}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+              const data = await res.json();
+              return { ...t, doctorName: data.displayName };
+            }
+          } catch (e) {
+            console.error("Failed to fetch participant info", e);
+          }
+          return t;
+        }));
+        setThreads(threadsWithDocs);
+      } catch (err) {
+        setThreads(fetchedThreads);
+      } finally {
+        setLoading(false);
+      }
     });
 
     return () => unsub();
@@ -81,7 +92,7 @@ export default function Messages() {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start mb-0.5">
                       <p className="text-sm font-semibold text-neutral-900 truncate">
-                        Dr. {thread.doctorName || 'Doctor'}
+                        {thread.doctorName ? (thread.doctorName.startsWith('Dr.') ? thread.doctorName : `Dr. ${thread.doctorName}`) : 'Doctor'}
                       </p>
                       <span className="text-[10px] text-neutral-400 whitespace-nowrap ml-2">
                         {new Date(thread.lastMessageAt).toLocaleDateString()}

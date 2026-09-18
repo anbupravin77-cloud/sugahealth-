@@ -81,12 +81,22 @@ export default function SexualHealth() {
             <h2 className="font-sans text-3xl sm:text-4xl font-extrabold text-neutral-950 tracking-tight mb-4">
               {cardiovascular.title}
             </h2>
-            <p className="text-neutral-600 text-base leading-relaxed mb-4">
-              {cardiovascular.p1}
-            </p>
-            <p className="text-neutral-600 text-base leading-relaxed">
-              {cardiovascular.p2}
-            </p>
+            {cardiovascular.paragraphs && cardiovascular.paragraphs.length > 0 ? (
+              cardiovascular.paragraphs.map((para, idx) => (
+                <p key={idx} className="text-neutral-600 text-base leading-relaxed mb-4 last:mb-0">
+                  {para}
+                </p>
+              ))
+            ) : (
+              <>
+                <p className="text-neutral-600 text-base leading-relaxed mb-4">
+                  {(cardiovascular as any).p1 || 'Penile arteries are among the smallest vascular channels in the body.'}
+                </p>
+                <p className="text-neutral-600 text-base leading-relaxed">
+                  {(cardiovascular as any).p2 || 'Vascular performance is intimately tied to whole-body cardiovascular function.'}
+                </p>
+              </>
+            )}
           </div>
           <div className="md:col-span-5 bg-neutral-950 text-white p-6 sm:p-8 rounded-2xl sm:rounded-3xl text-center border border-neutral-900">
             <span className="text-5xl font-extrabold tracking-tight block mb-2 text-white">
@@ -96,7 +106,7 @@ export default function SexualHealth() {
               {cardiovascular.statLabel}
             </span>
             <p className="text-xs text-neutral-300 leading-relaxed">
-              {cardiovascular.statDescription}
+              {cardiovascular.statDesc || (cardiovascular as any).statDescription}
             </p>
           </div>
         </div>
@@ -145,15 +155,15 @@ export default function SexualHealth() {
           </Reveal>
           <Reveal delay={0.1}>
             <p className="text-neutral-600 text-base sm:text-lg leading-relaxed mb-6 sm:mb-8 max-w-xl mx-auto">
-              {ctaBanner.subtitle}
+              {ctaBanner.description || (ctaBanner as any).subtitle}
             </p>
           </Reveal>
           <Reveal delay={0.2}>
             <Link 
-              to={ctaBanner.ctaPath} 
+              to={(ctaBanner as any).ctaPath || ctaBanner.buttonLink} 
               className="inline-flex items-center justify-center bg-neutral-950 border border-neutral-950 px-8 py-3.5 sm:py-4 rounded-full text-xs font-bold tracking-wider uppercase text-white hover:bg-neutral-800 transition-all group"
             >
-              {ctaBanner.ctaLabel}
+              {(ctaBanner as any).ctaLabel || ctaBanner.buttonText}
               <ArrowRight size={16} className="ml-2.5 group-hover:translate-x-1 transition-transform" />
             </Link>
           </Reveal>

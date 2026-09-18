@@ -38,7 +38,6 @@ export default function Admin() {
   const { 
     content, 
     draftContent, 
-    isAuthenticated, 
     isLoading, 
     updateDraft, 
     saveDraft,

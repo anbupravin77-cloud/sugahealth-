@@ -42,9 +42,9 @@ export default function WeightLoss() {
                 {science.description}
               </p>
               <div className="p-5 sm:p-6 rounded-2xl bg-white border border-neutral-200/90">
-                <span className="text-xs font-bold text-neutral-950 block mb-1">{science.factLabel}:</span>
+                <span className="text-xs font-bold text-neutral-950 block mb-1">{(science as any).factLabel || "Clinical Evidence"}:</span>
                 <span className="text-xs text-neutral-600 leading-normal">
-                  {science.factText}
+                  {science.clinicalFact || (science as any).factText}
                 </span>
               </div>
             </Reveal>
@@ -132,7 +132,7 @@ export default function WeightLoss() {
                 {comparison.title}
               </h3>
               <p className="mt-3 text-neutral-600 text-sm sm:text-base">
-                {comparison.subtitle}
+                {comparison.description || (comparison as any).subtitle}
               </p>
             </div>
             <Comparison mode="weight-loss" />
@@ -150,15 +150,15 @@ export default function WeightLoss() {
           </Reveal>
           <Reveal delay={0.1}>
             <p className="text-neutral-600 text-base sm:text-lg leading-relaxed mb-6 sm:mb-8 max-w-xl mx-auto">
-              {ctaBanner.subtitle}
+              {ctaBanner.description || (ctaBanner as any).subtitle}
             </p>
           </Reveal>
           <Reveal delay={0.2}>
             <Link 
-              to={ctaBanner.ctaPath} 
+              to={(ctaBanner as any).ctaPath || ctaBanner.buttonLink} 
               className="inline-flex items-center justify-center bg-neutral-950 border border-neutral-950 px-8 py-3.5 sm:py-4 rounded-full text-xs font-bold tracking-wider uppercase text-white hover:bg-neutral-800 transition-all group"
             >
-              {ctaBanner.ctaLabel}
+              {(ctaBanner as any).ctaLabel || ctaBanner.buttonText}
               <ArrowRight size={16} className="ml-2.5 group-hover:translate-x-1 transition-transform" />
             </Link>
           </Reveal>

@@ -56,6 +56,7 @@ export function ContentProvider({ children }: { children: ReactNode } = { childr
   
   // Auth & Preview
   const [authToken, setAuthToken] = useState<string | null>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(() => {
     try {
@@ -70,8 +71,10 @@ export function ContentProvider({ children }: { children: ReactNode } = { childr
       if (user) {
         const token = await user.getIdToken();
         setAuthToken(token);
+        setCurrentUserEmail(user.email);
       } else {
         setAuthToken(null);
+        setCurrentUserEmail(null);
       }
     });
   }, []);
@@ -99,11 +102,11 @@ export function ContentProvider({ children }: { children: ReactNode } = { childr
       const res = await fetch('/api/admin/content/draft', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (res.status === 401) {
-        // Token expired
+      if (res.status === 401 || res.status === 403) {
+        // Not an admin or session expired, don't throw an error
         return;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) return;
       const data = await res.json();
       if (data.draft) {
         setDraftContent(mergeWithDefault(data.draft));
@@ -111,8 +114,8 @@ export function ContentProvider({ children }: { children: ReactNode } = { childr
         setLastPublishedAt(data.lastPublishedAt || null);
         setHasUnpublishedChanges(Boolean(data.hasUnpublishedChanges));
       }
-    } catch (err) {
-      console.error('Failed to fetch admin draft content:', err);
+    } catch {
+      // Graceful fallback
     }
   }, []);
 
@@ -121,10 +124,14 @@ export function ContentProvider({ children }: { children: ReactNode } = { childr
   }, [fetchPublishedContent]);
 
   useEffect(() => {
-    if (authToken) {
-      fetchDraftContent(authToken);
+    if (authToken && currentUserEmail) {
+      const email = currentUserEmail.toLowerCase().trim();
+      const isAdmin = email === 'ramaadhiasha@gmail.com' || email.endsWith('@sugahealth.com') || email.startsWith('admin@');
+      if (isAdmin) {
+        fetchDraftContent(authToken);
+      }
     }
-  }, [authToken, fetchDraftContent]);
+  }, [authToken, currentUserEmail, fetchDraftContent]);
 
   const saveDraft = async (updated: SugaWebsiteContent) => {
     if (!authToken) return { success: false, error: 'Not authenticated' };
@@ -180,7 +187,11 @@ export function ContentProvider({ children }: { children: ReactNode } = { childr
     try {
       const res = await fetch('/api/admin/content/reset', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${authToken}` }
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}` 
+        },
+        body: JSON.stringify({ confirmation: 'RESET' })
       });
       const data = await res.json();
       if (!res.ok) {

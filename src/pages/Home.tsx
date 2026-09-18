@@ -38,7 +38,7 @@ export default function Home() {
   const howItWorksSteps = Array.isArray(howItWorksRaw) ? howItWorksRaw : (howItWorksRaw as any)?.steps || [];
   const accountabilityRaw = home.accountability || [];
   const accountabilityMetrics = Array.isArray(accountabilityRaw) ? accountabilityRaw : (accountabilityRaw as any)?.metrics || [];
-  const comparisonRaw = home.comparison || {};
+  const comparisonRaw = (home.comparison || {}) as any;
   const comparison = comparisonRaw;
   const traditionalPoints = Array.isArray(comparisonRaw.traditional) ? comparisonRaw.traditional : (comparisonRaw.traditional as any)?.points || [];
   const sugaPoints = Array.isArray(comparisonRaw.sugaModel) ? comparisonRaw.sugaModel : (comparisonRaw.sugaModel || (comparisonRaw as any).suga)?.points || [];
@@ -222,13 +222,13 @@ export default function Home() {
           
           <div className="max-w-3xl mx-auto text-center mb-8 sm:mb-12 flex flex-col items-center">
             <span className="text-xs font-bold tracking-widest text-neutral-500 uppercase block mb-2 text-center">
-              {home.timeline.eyebrow}
+              {(home.timeline as any)?.eyebrow || "Clinical Progression"}
             </span>
             <h2 className="font-sans text-3xl sm:text-4xl md:text-5xl font-extrabold text-neutral-950 tracking-tight mb-4 text-center">
-              {home.timeline.title}
+              {(home.timeline as any)?.title || "Clear Milestones from Day 1"}
             </h2>
             <p className="text-neutral-600 text-base sm:text-lg max-w-2xl mx-auto text-center">
-              {home.timeline.subtitle}
+              {(home.timeline as any)?.subtitle || "Expect real, measurable physiological changes with continuous medical guidance."}
             </p>
 
             {/* Timeline Program Toggle */}
@@ -374,10 +374,10 @@ export default function Home() {
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
           <GsapHeaderReveal className="text-center max-w-2xl mx-auto mb-8 sm:mb-12 flex flex-col items-center">
             <span className="text-xs font-bold tracking-widest text-neutral-400 uppercase block mb-2 text-center">
-              {comparison.eyebrow}
+              {comparison.eyebrow || "The Difference"}
             </span>
             <h2 className="font-sans text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight leading-[1.15] pb-1 text-center">
-              {comparison.title}
+              {comparison.title || "The Suga Standard vs Traditional Healthcare"}
             </h2>
           </GsapHeaderReveal>
 
@@ -485,7 +485,7 @@ export default function Home() {
               {ctaBanner.title}
             </h2>
             <p className="text-neutral-400 text-base sm:text-lg">
-              {ctaBanner.subtitle}
+              {ctaBanner.description || (ctaBanner as any).subtitle}
             </p>
           </div>
           <div className="shrink-0 w-full sm:w-auto">

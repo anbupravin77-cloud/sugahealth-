@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Loader2, Send, Clock, User, ShieldCheck } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, query, where, orderBy, onSnapshot, doc, getDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, doc } from 'firebase/firestore';
 
 export default function MessageThread({ threadId, onBack }: { threadId: string, onBack?: () => void }) {
   const { user, profile } = useAuth();
@@ -26,12 +26,20 @@ export default function MessageThread({ threadId, onBack }: { threadId: string, 
         const data = docSnap.data();
         setThreadData(data);
         
-        // Fetch other user profile for display
+        // Fetch other user profile safely via backend endpoint
         const otherId = isDoctor ? data.patientId : data.doctorId;
         if (otherId && (!otherUser || otherUser.id !== otherId)) {
-          const userSnap = await getDoc(doc(db, isDoctor ? 'users' : 'staff_profiles', otherId));
-          if (userSnap.exists()) {
-            setOtherUser({ id: otherId, ...userSnap.data() });
+          try {
+            const token = await user.getIdToken();
+            const res = await fetch(`/api/messaging/participant/${otherId}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+              const uData = await res.json();
+              setOtherUser(uData);
+            }
+          } catch (e) {
+            console.error('Failed to fetch participant in MessageThread:', e);
           }
         }
       }
@@ -139,12 +147,12 @@ export default function MessageThread({ threadId, onBack }: { threadId: string, 
               {isDoctor ? (
                 <>
                   <User size={18} className="text-neutral-400" />
-                  {otherUser ? `${otherUser.firstName} ${otherUser.lastName}` : 'Patient'}
+                  {otherUser ? (otherUser.displayName || `${otherUser.firstName || ''} ${otherUser.lastName || ''}`.trim() || 'Patient') : 'Patient'}
                 </>
               ) : (
                 <>
                   <ShieldCheck size={18} className="text-emerald-500" />
-                  Dr. {otherUser ? otherUser.lastName : 'Doctor'}
+                  {otherUser ? (otherUser.displayName ? (otherUser.displayName.startsWith('Dr.') ? otherUser.displayName : `Dr. ${otherUser.displayName}`) : (otherUser.lastName ? `Dr. ${otherUser.lastName}` : 'Doctor')) : 'Doctor'}
                 </>
               )}
             </h3>

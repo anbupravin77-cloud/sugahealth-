@@ -39,26 +39,32 @@ export default function About() {
                 {mission.title}
               </h2>
               <span className="text-lg sm:text-xl font-medium text-neutral-600 block mt-2 tracking-tight">
-                {mission.tagline}
+                {mission.subtitle || (mission as any).tagline}
               </span>
             </Reveal>
           </div>
           <div className="lg:col-span-7 space-y-4 sm:space-y-6 text-neutral-700 text-base sm:text-lg leading-relaxed">
-            <Reveal delay={0.1}>
-              <p>
-                {mission.p1}
-              </p>
-            </Reveal>
-            <Reveal delay={0.2}>
-              <p>
-                {mission.p2}
-              </p>
-            </Reveal>
-            <Reveal delay={0.3}>
-              <p className="text-neutral-500 font-medium">
-                {mission.p3}
-              </p>
-            </Reveal>
+            {mission.paragraphs && mission.paragraphs.length > 0 ? (
+              mission.paragraphs.map((para, idx) => (
+                <Reveal key={idx} delay={0.1 * (idx + 1)}>
+                  <p className={idx === mission.paragraphs.length - 1 ? "text-neutral-500 font-medium" : ""}>
+                    {para}
+                  </p>
+                </Reveal>
+              ))
+            ) : (
+              <>
+                <Reveal delay={0.1}>
+                  <p>{(mission as any).p1}</p>
+                </Reveal>
+                <Reveal delay={0.2}>
+                  <p>{(mission as any).p2}</p>
+                </Reveal>
+                <Reveal delay={0.3}>
+                  <p className="text-neutral-500 font-medium">{(mission as any).p3}</p>
+                </Reveal>
+              </>
+            )}
           </div>
         </div>
       </Section>
@@ -108,7 +114,7 @@ export default function About() {
                 {(safety as any)?.title || "Safety Without Compromise"}
               </h2>
               <p className="text-neutral-600 text-base leading-relaxed">
-                {safety.subtitle}
+                {(safety as any)?.subtitle || "We hold our clinical protocols to the highest standards of safety and regulatory compliance."}
               </p>
             </Reveal>
           </div>
@@ -162,15 +168,15 @@ export default function About() {
           </Reveal>
           <Reveal delay={0.1}>
             <p className="text-neutral-600 text-base sm:text-lg leading-relaxed mb-6 sm:mb-8 max-w-xl mx-auto">
-              {ctaBanner.subtitle}
+              {ctaBanner.description || (ctaBanner as any).subtitle}
             </p>
           </Reveal>
           <Reveal delay={0.2}>
             <Link 
-              to={ctaBanner.ctaPath} 
+              to={(ctaBanner as any).ctaPath || ctaBanner.buttonLink} 
               className="inline-flex items-center justify-center bg-neutral-950 border border-neutral-950 px-8 py-3.5 sm:py-4 rounded-full text-xs font-bold tracking-wider uppercase text-white hover:bg-neutral-800 transition-all group"
             >
-              {ctaBanner.ctaLabel}
+              {(ctaBanner as any).ctaLabel || ctaBanner.buttonText}
               <ArrowRight size={16} className="ml-2.5 group-hover:translate-x-1 transition-transform" />
             </Link>
           </Reveal>

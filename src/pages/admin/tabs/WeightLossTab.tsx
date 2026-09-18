@@ -12,25 +12,51 @@ export function WeightLossTab(props: WeightLossTabProps) {
   const onChange = props?.onChange || (() => {});
 
   const addPillar = () => {
-    onChange({ ...data, pillars: [...data.pillars, { title: 'New Pillar', desc: 'Desc', icon: 'Star' }] });
+    const num = `0${(data.pillars?.length || 0) + 1}`;
+    onChange({
+      ...data,
+      pillars: [
+        ...(data.pillars || []),
+        { num, tag: 'METABOLIC', title: 'New Biological Pillar', desc: 'Clinical explanation of physiological mechanism.' }
+      ]
+    });
   };
   const removePillar = (idx: number) => {
-    onChange({ ...data, pillars: data.pillars.filter((_, i) => i !== idx) });
+    onChange({ ...data, pillars: (data.pillars || []).filter((_, i) => i !== idx) });
   };
   const addMedication = () => {
-    onChange({ ...data, medications: [...data.medications, { name: 'New Med', subtitle: 'Sub', description: 'Desc', benefits: ['Benefit'] }] });
+    onChange({
+      ...data,
+      medications: [
+        ...(data.medications || []),
+        {
+          title: 'Compounded Protocol',
+          tag: 'GLP-1 Protocol',
+          desc: 'Physician-supervised dosing schedule.',
+          benefits: ['Regulates metabolic hunger signals', 'Physician monitoring included'],
+          buttonText: 'Start Consultation',
+          buttonLink: '/consultation'
+        }
+      ]
+    });
   };
   const removeMedication = (idx: number) => {
-    onChange({ ...data, medications: data.medications.filter((_, i) => i !== idx) });
+    onChange({ ...data, medications: (data.medications || []).filter((_, i) => i !== idx) });
   };
   const addBenefit = (mIdx: number) => {
-    const updated = [...data.medications];
-    updated[mIdx].benefits.push('New Benefit');
+    const updated = [...(data.medications || [])];
+    updated[mIdx] = {
+      ...updated[mIdx],
+      benefits: [...(updated[mIdx].benefits || []), 'New Clinical Benefit']
+    };
     onChange({ ...data, medications: updated });
   };
   const removeBenefit = (mIdx: number, bIdx: number) => {
-    const updated = [...data.medications];
-    updated[mIdx].benefits = updated[mIdx].benefits.filter((_, i) => i !== bIdx);
+    const updated = [...(data.medications || [])];
+    updated[mIdx] = {
+      ...updated[mIdx],
+      benefits: (updated[mIdx].benefits || []).filter((_, i) => i !== bIdx)
+    };
     onChange({ ...data, medications: updated });
   };
 
@@ -130,10 +156,32 @@ export function WeightLossTab(props: WeightLossTabProps) {
 
       {/* 3 Core Pillars */}
       <div className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-4">
-        <h3 className="font-sans text-base font-bold text-neutral-950">Core Biological Pillars</h3>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-sans text-base font-bold text-neutral-950">Core Biological Pillars</h3>
+            <p className="text-xs text-neutral-500">Key physiological pillars supporting patient outcome.</p>
+          </div>
+          <button
+            type="button"
+            onClick={addPillar}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+          >
+            <Plus size={14} /> Add Pillar
+          </button>
+        </div>
         {data.pillars.map((pil, idx) => (
           <div key={idx} className="p-4 rounded-xl bg-neutral-50 border border-neutral-200 space-y-3">
-            <span className="text-xs font-bold text-neutral-500 uppercase">Pillar {pil.num}</span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-neutral-500 uppercase">Pillar {pil.num}</span>
+              <button
+                type="button"
+                onClick={() => removePillar(idx)}
+                className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                title="Remove pillar"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">Tag Pill</label>
@@ -169,9 +217,32 @@ export function WeightLossTab(props: WeightLossTabProps) {
 
       {/* Medication Formulations */}
       <div className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-4">
-        <h3 className="font-sans text-base font-bold text-neutral-950">Medication Formulations</h3>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-sans text-base font-bold text-neutral-950">Medication Formulations</h3>
+            <p className="text-xs text-neutral-500">Compounded and brand medication offerings.</p>
+          </div>
+          <button
+            type="button"
+            onClick={addMedication}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+          >
+            <Plus size={14} /> Add Formulation
+          </button>
+        </div>
         {data.medications.map((med, idx) => (
           <div key={idx} className="p-4 rounded-xl bg-neutral-50 border border-neutral-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-neutral-500 uppercase">Formulation #{idx + 1}</span>
+              <button
+                type="button"
+                onClick={() => removeMedication(idx)}
+                className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                title="Remove formulation"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">Medication Title</label>
@@ -202,7 +273,16 @@ export function WeightLossTab(props: WeightLossTabProps) {
               />
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">Clinical Benefits (3 Points)</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[10px] font-bold uppercase text-neutral-600">Clinical Benefits</label>
+                <button
+                  type="button"
+                  onClick={() => addBenefit(idx)}
+                  className="text-[11px] font-bold text-neutral-900 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus size={12} /> Add Benefit
+                </button>
+              </div>
               <div className="space-y-1.5">
                 {med.benefits.map((bnf, bIdx) => (
                   <div key={bIdx} className="flex items-center gap-2">
@@ -212,7 +292,7 @@ export function WeightLossTab(props: WeightLossTabProps) {
                       onChange={(e) => updateMedBenefit(idx, bIdx, e.target.value)}
                       className="w-full px-2.5 py-1 text-xs rounded border border-neutral-300 bg-white"
                     />
-                    <button type="button" onClick={() => removeBenefit(idx, bIdx)} className="text-red-500"><Trash2 size={14}/></button>
+                    <button type="button" onClick={() => removeBenefit(idx, bIdx)} className="text-red-500 cursor-pointer"><Trash2 size={14}/></button>
                   </div>
                 ))}
               </div>

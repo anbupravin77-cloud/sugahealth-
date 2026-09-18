@@ -47,13 +47,17 @@ export function ProductsTab(props: ProductsTabProps) {
     const updated = [newProduct, ...products];
     onChange(updated);
     setEditingIdx(0);
+    setDraftProduct(newProduct);
   };
 
   const handleDelete = (idx: number) => {
-    if (true) {
-      const updated = products.filter((_, i) => i !== idx);
-      onChange(updated);
-      if (editingIdx === idx) setEditingIdx(null);
+    const confirmed = window.confirm("Are you sure you want to remove this medication from the formulary?");
+    if (!confirmed) return;
+    const updated = products.filter((_, i) => i !== idx);
+    onChange(updated);
+    if (editingIdx === idx) {
+      setEditingIdx(null);
+      setDraftProduct(null);
     }
   };
 
@@ -65,24 +69,25 @@ export function ProductsTab(props: ProductsTabProps) {
   };
 
   const updateBenefit = (bIdx: number, val: string) => {
-    if (draftProduct) {
-      const updatedBenefits = [...draftProduct.benefits];
-      updatedBenefits[bIdx] = val;
-      setDraftProduct({ ...draftProduct, benefits: updatedBenefits });
-    }
+    if (editingIdx === null) return;
+    const current = products[editingIdx];
+    const updatedBenefits = [...(current.benefits || [])];
+    updatedBenefits[bIdx] = val;
+    updateCurrent('benefits', updatedBenefits);
   };
 
   const addBenefit = () => {
-    if (draftProduct) {
-      setDraftProduct({ ...draftProduct, benefits: [...draftProduct.benefits, 'New benefit'] });
-    }
+    if (editingIdx === null) return;
+    const current = products[editingIdx];
+    const updatedBenefits = [...(current.benefits || []), 'New clinical benefit'];
+    updateCurrent('benefits', updatedBenefits);
   };
 
   const removeBenefit = (bIdx: number) => {
-    if (draftProduct) {
-      const updatedBenefits = draftProduct.benefits.filter((_, i) => i !== bIdx);
-      setDraftProduct({ ...draftProduct, benefits: updatedBenefits });
-    }
+    if (editingIdx === null) return;
+    const current = products[editingIdx];
+    const updatedBenefits = (current.benefits || []).filter((_, i) => i !== bIdx);
+    updateCurrent('benefits', updatedBenefits);
   };
 
   const currentProduct = editingIdx !== null ? products[editingIdx] : null;

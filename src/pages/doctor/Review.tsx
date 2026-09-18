@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../lib/firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { Loader2, ArrowLeft, Shield, User, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import { ClinicalNotes } from './ClinicalNotes';
 import { PrescriptionBuilder } from './PrescriptionBuilder';
@@ -66,15 +66,22 @@ export default function DoctorReview() {
     if (!user || !id) return;
     setMarkingComplete(true);
     try {
-      const docRef = doc(db, 'consultations', id);
-      await updateDoc(docRef, {
-        status: 'completed',
-        updatedAt: new Date().toISOString()
+      const token = await user.getIdToken();
+      const res = await fetch(`/api/consultations/${id}/complete`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        }
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to mark completed');
+      }
       setConsultation((prev: any) => ({ ...prev, status: 'completed' }));
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("Failed to mark completed");
+      alert(err.message || "Failed to mark completed");
     } finally {
       setMarkingComplete(false);
     }

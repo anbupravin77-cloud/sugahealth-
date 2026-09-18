@@ -1,9 +1,9 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth, Address } from '../context/AuthContext';
-import { doc, updateDoc, collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Loader2, CheckCircle2, User, MapPin, FileText, ArrowRight, ShoppingBag, Bell } from 'lucide-react';
+import { Loader2, CheckCircle2, User, MapPin, FileText, ArrowRight, ShoppingBag, Bell, Repeat } from 'lucide-react';
 import { PatientDocumentList } from './PatientDocumentList';
 import { OrdersList } from './patient/OrdersList';
 import SubscriptionsList from './patient/SubscriptionsList';
@@ -11,7 +11,7 @@ import { NotificationPreferences } from './patient/NotificationPreferences';
 
 export default function Account() {
   const { user, profile, refreshProfile } = useAuth();
-  const [activeTab, setActiveTab] = useState<'personal' | 'shipping' | 'consultations' | 'orders' | 'notifications'>('personal');
+  const [activeTab, setActiveTab] = useState<'personal' | 'shipping' | 'consultations' | 'orders' | 'subscriptions' | 'notifications'>('personal');
   
   // Consultations State
   const [consultations, setConsultations] = useState<any[]>([]);
@@ -92,14 +92,25 @@ export default function Account() {
       setError('');
       setSuccess('');
       
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        firstName,
-        lastName,
-        dateOfBirth: dob,
-        sex,
-        updatedAt: new Date().toISOString()
+      const token = await user.getIdToken();
+      const res = await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          dateOfBirth: dob,
+          sex
+        })
       });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to save personal information.');
+      }
       
       await refreshProfile();
       setSuccess('Personal information saved successfully.');
@@ -121,11 +132,22 @@ export default function Account() {
       setError('');
       setSuccess('');
       
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        shippingAddress: shipping,
-        updatedAt: new Date().toISOString()
+      const token = await user.getIdToken();
+      const res = await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          shippingAddress: shipping
+        })
       });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to save shipping address.');
+      }
       
       await refreshProfile();
       setSuccess('Shipping address saved successfully.');
@@ -194,6 +216,17 @@ export default function Account() {
             >
               <ShoppingBag size={18} />
               Orders
+            </button>
+            <button
+              onClick={() => setActiveTab('subscriptions')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'subscriptions'
+                  ? 'bg-neutral-950 text-white'
+                  : 'text-neutral-600 hover:bg-neutral-100'
+              }`}
+            >
+              <Repeat size={18} />
+              Subscriptions
             </button>
             <button
               onClick={() => setActiveTab('notifications')}

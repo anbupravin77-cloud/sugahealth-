@@ -32,24 +32,41 @@ export function HomeTab(props: HomeTabProps) {
     onChange({ ...data, specializations: data.specializations.filter((_, i) => i !== idx) });
   };
   const addTimelineStep = (cat: 'weight' | 'hair' | 'sexual') => {
-    const updated = [...data.timeline[cat], { phase: 'Phase', label: 'Label', description: 'Desc' }];
+    const nextIdx = (data.timeline?.[cat]?.length || 0) + 1;
+    const updated = [
+      ...(data.timeline?.[cat] || []),
+      { phase: `Month ${nextIdx}`, label: 'Clinical Milestone', description: 'Observable physiological progression and biomarker response.' }
+    ];
     onChange({ ...data, timeline: { ...data.timeline, [cat]: updated } });
   };
   const removeTimelineStep = (cat: 'weight' | 'hair' | 'sexual', idx: number) => {
-    const updated = data.timeline[cat].filter((_, i) => i !== idx);
+    const updated = (data.timeline?.[cat] || []).filter((_, i) => i !== idx);
     onChange({ ...data, timeline: { ...data.timeline, [cat]: updated } });
   };
   const addHowItWorksStep = () => {
-    onChange({ ...data, howItWorks: [...data.howItWorks, { time: '01', title: 'New Step', desc: 'Desc' }] });
+    const step = `0${(data.howItWorks?.length || 0) + 1}`;
+    onChange({
+      ...data,
+      howItWorks: [
+        ...(data.howItWorks || []),
+        { step, time: '10 Mins', title: 'New Clinical Protocol Step', desc: 'Physician assessment and treatment coordination.' }
+      ]
+    });
   };
   const removeHowItWorksStep = (idx: number) => {
-    onChange({ ...data, howItWorks: data.howItWorks.filter((_, i) => i !== idx) });
+    onChange({ ...data, howItWorks: (data.howItWorks || []).filter((_, i) => i !== idx) });
   };
   const addAccountability = () => {
-    onChange({ ...data, accountability: [...data.accountability, { value: 0, suffix: '%', title: 'Metric', desc: 'Desc' }] });
+    onChange({
+      ...data,
+      accountability: [
+        ...(data.accountability || []),
+        { value: 95, prefix: '', suffix: '%', title: 'Clinical Retention', desc: 'Patients maintaining steady therapeutic regimen.' }
+      ]
+    });
   };
   const removeAccountability = (idx: number) => {
-    onChange({ ...data, accountability: data.accountability.filter((_, i) => i !== idx) });
+    onChange({ ...data, accountability: (data.accountability || []).filter((_, i) => i !== idx) });
   };
 
   const updateSpecialization = (index: number, field: string, val: any) => {
@@ -388,13 +405,33 @@ export function HomeTab(props: HomeTabProps) {
         <div className="space-y-6">
           {(['weight', 'hair', 'sexual'] as const).map((cat) => (
             <div key={cat} className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-4">
-              <h4 className="font-sans text-sm font-bold text-neutral-950 uppercase tracking-wider">
-                {cat === 'weight' ? 'Weight Loss Timeline' : cat === 'hair' ? 'Hair Restoration Timeline' : 'Sexual Health Timeline'}
-              </h4>
+              <div className="flex items-center justify-between">
+                <h4 className="font-sans text-sm font-bold text-neutral-950 uppercase tracking-wider">
+                  {cat === 'weight' ? 'Weight Loss Timeline' : cat === 'hair' ? 'Hair Restoration Timeline' : 'Sexual Health Timeline'}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => addTimelineStep(cat)}
+                  className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+                >
+                  <Plus size={12} /> Add Phase
+                </button>
+              </div>
 
               <div className="space-y-3">
                 {data.timeline[cat].map((step, idx) => (
                   <div key={idx} className="p-3 bg-neutral-50 rounded-xl border border-neutral-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-neutral-400 uppercase">Milestone #{idx + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeTimelineStep(cat, idx)}
+                        className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                        title="Remove milestone"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[10px] font-bold uppercase text-neutral-500 mb-1">Phase (e.g. Month 1)</label>
@@ -435,12 +472,34 @@ export function HomeTab(props: HomeTabProps) {
       {/* How It Works */}
       {activeSection === 'howItWorks' && (
         <div className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-5">
-          <h3 className="font-sans text-base font-bold text-neutral-950">How It Works (3 Steps)</h3>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-sans text-base font-bold text-neutral-950">How It Works</h3>
+              <p className="text-xs text-neutral-500">Step-by-step patient onboarding and telemedicine protocol.</p>
+            </div>
+            <button
+              type="button"
+              onClick={addHowItWorksStep}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+            >
+              <Plus size={14} /> Add Step
+            </button>
+          </div>
 
           <div className="space-y-4">
             {data.howItWorks.map((st, idx) => (
               <div key={idx} className="p-4 rounded-xl bg-neutral-50 border border-neutral-200 space-y-3">
-                <span className="text-xs font-bold text-neutral-500 uppercase">Step {st.step}</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-neutral-500 uppercase">Step {st.step}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeHowItWorksStep(idx)}
+                    className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                    title="Remove step"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">Step Title</label>
@@ -479,11 +538,34 @@ export function HomeTab(props: HomeTabProps) {
       {/* Accountability Metrics */}
       {activeSection === 'accountability' && (
         <div className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-5">
-          <h3 className="font-sans text-base font-bold text-neutral-950">Accountability Metrics (3 Stats)</h3>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-sans text-base font-bold text-neutral-950">Accountability Metrics</h3>
+              <p className="text-xs text-neutral-500">Key performance indicators and patient success figures.</p>
+            </div>
+            <button
+              type="button"
+              onClick={addAccountability}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+            >
+              <Plus size={14} /> Add Metric
+            </button>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {data.accountability.map((m, idx) => (
               <div key={idx} className="p-4 rounded-xl bg-neutral-50 border border-neutral-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-neutral-400 uppercase">Metric #{idx + 1}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAccountability(idx)}
+                    className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                    title="Remove metric"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
                 <div className="flex gap-1">
                   <input
                     type="text"

@@ -260,7 +260,7 @@ export default function Consultation() {
     exit: { opacity: 0, x: shouldReduceMotion ? 0 : -20 }
   };
 
-  const pageTransition = { duration: 0.35, ease: [0.16, 1, 0.3, 1] };
+  const pageTransition = { duration: 0.35, ease: [0.16, 1, 0.3, 1] as const };
 
   const primaryOptions = [
     { id: 'weight', title: 'Medical Weight Loss', desc: 'GLP-1 therapy (Semaglutide / Tirzepatide)' },

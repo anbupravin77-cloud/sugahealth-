@@ -1,4 +1,4 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { adminDb as db } from './firebaseAdmin';
 import { getTemplate, NotificationEventType } from './notificationTemplates';
 import { DefaultEmailProvider, EmailProvider } from './providers/email';
 import { DefaultSmsProvider, SmsProvider } from './providers/sms';
@@ -46,7 +46,6 @@ export class NotificationService {
   }
 
   async getPreferences(userId: string): Promise<NotificationPreferences> {
-    const db = getFirestore();
     const snap = await db.collection('notification_preferences').doc(userId).get();
     if (!snap.exists) {
       // Defaults
@@ -56,13 +55,10 @@ export class NotificationService {
   }
 
   async updatePreferences(userId: string, prefs: Partial<NotificationPreferences>) {
-    const db = getFirestore();
     await db.collection('notification_preferences').doc(userId).set(prefs, { merge: true });
   }
 
   async createNotification(data: Omit<Notification, 'notificationId' | 'createdAt' | 'status'>) {
-    const db = getFirestore();
-    
     // Check idempotency
     if (data.idempotencyKey) {
       const existingSnap = await db.collection('notifications')
@@ -107,7 +103,6 @@ export class NotificationService {
   }
 
   private async processExternalDeliveries(notification: Notification, prefs: NotificationPreferences) {
-    const db = getFirestore();
     const patientSnap = await db.collection('users').doc(notification.patientId).get();
     const patientData = patientSnap.data();
     
@@ -139,7 +134,6 @@ export class NotificationService {
     isVerified: boolean,
     maxRetries = 3
   ) {
-    const db = getFirestore();
     const deliveryId = `del_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     
     // Create deterministic idempotency key for this delivery attempt

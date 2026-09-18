@@ -1,10 +1,8 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { adminDb as db } from './firebaseAdmin';
 import { NotificationService } from './notifications';
 
 export class MessagingService {
   async ensureThread(patientId: string, doctorId: string, consultationId: string) {
-    const db = getFirestore();
-    
     // Check if an open thread already exists for this consultation
     const existingSnap = await db.collection('message_threads')
       .where('consultationId', '==', consultationId)
@@ -48,7 +46,6 @@ export class MessagingService {
   }
 
   async sendMessage(threadId: string, senderUid: string, senderRole: 'patient' | 'doctor', text: string) {
-    const db = getFirestore();
     const threadRef = db.collection('message_threads').doc(threadId);
     
     const threadSnap = await threadRef.get();
@@ -127,7 +124,6 @@ export class MessagingService {
   }
 
   async markAsRead(threadId: string, readerUid: string, readerRole: 'patient' | 'doctor') {
-    const db = getFirestore();
     const threadRef = db.collection('message_threads').doc(threadId);
     
     const timestamp = new Date().toISOString();

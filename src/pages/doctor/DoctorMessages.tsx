@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../lib/firebase';
-import { collection, query, where, orderBy, onSnapshot, getDoc, doc } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { Loader2, MessageSquare, User } from 'lucide-react';
 import MessageThread from '../../components/MessageThread';
 
@@ -23,19 +23,30 @@ export default function DoctorMessages() {
     const unsub = onSnapshot(q, async (snap) => {
       const fetchedThreads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       
-      // Fetch patient names for the threads
-      const threadsWithPatients = await Promise.all(fetchedThreads.map(async (t: any) => {
-        if (!t.patientId) return t;
-        const pSnap = await getDoc(doc(db, 'users', t.patientId));
-        if (pSnap.exists()) {
-          const pData = pSnap.data();
-          return { ...t, patientName: `${pData.firstName} ${pData.lastName}` };
-        }
-        return t;
-      }));
-      
-      setThreads(threadsWithPatients);
-      setLoading(false);
+      // Fetch patient names for the threads via secure participant endpoint
+      try {
+        const token = await user.getIdToken();
+        const threadsWithPatients = await Promise.all(fetchedThreads.map(async (t: any) => {
+          if (!t.patientId) return t;
+          try {
+            const res = await fetch(`/api/messaging/participant/${t.patientId}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+              const data = await res.json();
+              return { ...t, patientName: data.displayName };
+            }
+          } catch (e) {
+            console.error('Failed to fetch patient participant info', e);
+          }
+          return t;
+        }));
+        setThreads(threadsWithPatients);
+      } catch (err) {
+        setThreads(fetchedThreads);
+      } finally {
+        setLoading(false);
+      }
     });
 
     return () => unsub();

@@ -63,6 +63,9 @@ export function PrescriptionBuilder({ consultationId }: PrescriptionBuilderProps
             setPrescriptionId(data.prescription.id);
             setStatus(data.prescription.status);
             setMedications(data.prescription.medications || []);
+            setRefillEligible(Boolean(data.prescription.refillEligible));
+            setRefillIntervalDays(Number(data.prescription.refillIntervalDays) || 30);
+            setTreatmentCategory(data.prescription.treatmentCategory || '');
           }
         }
       } catch (err) {
@@ -141,7 +144,13 @@ export function PrescriptionBuilder({ consultationId }: PrescriptionBuilderProps
       await fetch(`/api/consultations/${consultationId}/prescription`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ medications, prescriptionId })
+        body: JSON.stringify({
+          medications,
+          prescriptionId,
+          refillEligible,
+          refillIntervalDays,
+          treatmentCategory
+        })
       });
 
       const res = await fetch(`/api/consultations/${consultationId}/prescription/finalize`, {

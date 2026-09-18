@@ -27,8 +27,8 @@ export default function NotificationCenter() {
         const data = await res.json();
         setNotifications(data);
       }
-    } catch (err) {
-      console.error('Error fetching notifications:', err);
+    } catch {
+      // Fallback gracefully
     } finally {
       setLoading(false);
     }
@@ -42,8 +42,8 @@ export default function NotificationCenter() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, status: 'read' } : n));
-    } catch (err) {
-      console.error('Error marking as read:', err);
+    } catch {
+      // Fallback
     }
   };
 
@@ -55,8 +55,8 @@ export default function NotificationCenter() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       setNotifications(prev => prev.map(n => ({ ...n, status: 'read' })));
-    } catch (err) {
-      console.error('Error marking all as read:', err);
+    } catch {
+      // Fallback
     }
   };
 

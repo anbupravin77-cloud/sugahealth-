@@ -58,17 +58,26 @@ service cloud.firestore {
 
     // Consultations collection
     match /consultations/{consultationId} {
-      // Patients can read their own. Doctors and Admins can read all.
+      // Patients can read their own.
+      // Doctors can read assigned consultations or unassigned ones in queue.
+      // Admins can read all.
       allow read: if isAuthenticated() && (
         isOwner(resource.data.patientId) || 
-        getUserRole() in ['doctor', 'admin']
+        isAdmin() ||
+        (getUserRole() == 'doctor' && (
+          resource.data.assignedTo == request.auth.uid ||
+          resource.data.assignedTo == null ||
+          resource.data.assignedTo == ''
+        ))
       );
       
       // Patients can create a consultation
       allow create: if isAuthenticated() && isOwner(request.resource.data.patientId);
       
       // Patients can only update their own if it's a draft, and they can only transition it to submitted or keep it draft.
-      // Staff can update anything.
+      // Doctors can assign unassigned consultations to themselves or update draft fields,
+      // but COMPLETION must go through backend API (request.resource.data.status != 'completed').
+      // Admins can update all.
       allow update: if isAuthenticated() && (
         (
           isOwner(resource.data.patientId) && 
@@ -76,7 +85,18 @@ service cloud.firestore {
           request.resource.data.status in ['draft', 'submitted'] &&
           request.resource.data.patientId == resource.data.patientId
         ) || 
-        getUserRole() in ['doctor', 'admin']
+        isAdmin() ||
+        (
+          getUserRole() == 'doctor' &&
+          request.resource.data.status != 'completed' &&
+          (
+            resource.data.assignedTo == request.auth.uid ||
+            (
+              (resource.data.assignedTo == null || resource.data.assignedTo == '') &&
+              request.resource.data.assignedTo == request.auth.uid
+            )
+          )
+        )
       );
       
       allow delete: if false; // Consultations should not be deleted, only cancelled
@@ -95,6 +115,8 @@ service cloud.firestore {
     match /prescriptions/{prescriptionId} {
       allow read: if isAuthenticated() && (
         (getUserRole() == 'doctor' && resource.data.doctorId == request.auth.uid) ||
+        isOwner(resource.data.patientId) ||
+        getUserRole() == 'pharmacist' ||
         isAdmin()
       );
       // All writes must go through the backend API for audit logging
@@ -105,6 +127,7 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow read: if isAuthenticated() && (
         isOwner(resource.data.patientId) ||
+        getUserRole() == 'pharmacist' ||
         isAdmin()
       );
       // All writes must go through the backend API for pricing and audit logging

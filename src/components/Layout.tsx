@@ -30,19 +30,26 @@ export default function Layout() {
 
   // Dynamically synchronize document title and meta description
   useEffect(() => {
-    if (seo?.title) {
-      document.title = seo.title;
+    if (!seo) return;
+    let pageSeo = seo.home;
+    if (pathname.includes('weight-loss')) pageSeo = seo.weightLoss;
+    else if (pathname.includes('hair-growth')) pageSeo = seo.hairGrowth;
+    else if (pathname.includes('sexual-health')) pageSeo = seo.sexualHealth;
+    else if (pathname.includes('about')) pageSeo = seo.about;
+
+    if (pageSeo?.title) {
+      document.title = pageSeo.title;
     }
-    if (seo?.description) {
+    if (pageSeo?.description) {
       let metaDesc = document.querySelector('meta[name="description"]');
       if (!metaDesc) {
         metaDesc = document.createElement('meta');
         metaDesc.setAttribute('name', 'description');
         document.head.appendChild(metaDesc);
       }
-      metaDesc.setAttribute('content', seo.description);
+      metaDesc.setAttribute('content', pageSeo.description);
     }
-  }, [seo]);
+  }, [seo, pathname]);
 
   useEffect(() => {
     const handleScroll = () => {

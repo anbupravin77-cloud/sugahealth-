@@ -1,27 +1,80 @@
-import { getFirestore } from 'firebase-admin/firestore';
 import crypto from 'crypto';
 import Stripe from 'stripe';
 import { config } from './config';
 
+const FORMULARY_PRICES: Record<string, number> = {
+  'semaglutide': 199.00,
+  'tirzepatide': 299.00,
+  'finasteride': 45.00,
+  'minoxidil': 39.00,
+  'tadalafil': 48.00,
+  'sildenafil': 35.00,
+  'enclomiphene': 89.00,
+  'dutasteride': 49.00,
+  'nad+': 149.00,
+  'b12': 49.00,
+};
+
+function resolveMedicationUnitPrice(med: any): number {
+  if (typeof med.unitPrice === 'number' && !isNaN(med.unitPrice) && med.unitPrice > 0) {
+    return med.unitPrice;
+  }
+  if (typeof med.price === 'number' && !isNaN(med.price) && med.price > 0) {
+    return med.price;
+  }
+  const name = String(med.medicationName || '').toLowerCase();
+  const ingredient = String(med.activeIngredient || '').toLowerCase();
+
+  for (const [key, price] of Object.entries(FORMULARY_PRICES)) {
+    if (name.includes(key) || ingredient.includes(key)) {
+      return price;
+    }
+  }
+
+  return 45.00;
+}
+
+function resolveQuantity(med: any): number {
+  if (typeof med.quantity === 'number' && !isNaN(med.quantity) && med.quantity >= 1) {
+    return Math.floor(med.quantity);
+  }
+  if (typeof med.quantity === 'string') {
+    const match = med.quantity.match(/\d+/);
+    if (match) {
+      const parsed = parseInt(match[0], 10);
+      if (!isNaN(parsed) && parsed >= 1) return parsed;
+    }
+  }
+  return 1;
+}
+
 export function calculateOrderTotals(medications: any[]) {
+  if (!Array.isArray(medications) || medications.length === 0) {
+    throw new Error('Cannot calculate order totals: medications array is empty');
+  }
+
   const lineItems = medications.map((med) => {
-    // Mock base price mapping or standard pricing
-    const unitPrice = 45.00; 
-    const quantity = 1; // Standardized unit quantity for milestone
-    
+    const unitPrice = resolveMedicationUnitPrice(med);
+    const quantity = resolveQuantity(med);
+    const totalPrice = Math.round(unitPrice * quantity * 100) / 100;
+
     return {
-      medicationName: med.medicationName,
+      medicationName: med.medicationName || 'Compounded Medication',
       activeIngredient: med.activeIngredient || '',
       quantity,
       unitPrice,
-      totalPrice: unitPrice * quantity
+      totalPrice
     };
   });
 
-  const subtotal = lineItems.reduce((acc, item) => acc + item.totalPrice, 0);
-  const shippingAmount = 15.00;
-  const taxAmount = subtotal * 0.08; // 8% tax
-  const totalAmount = subtotal + shippingAmount + taxAmount;
+  const subtotal = Math.round(lineItems.reduce((acc, item) => acc + item.totalPrice, 0) * 100) / 100;
+  const shippingAmount = subtotal > 0 ? 15.00 : 0;
+  const taxAmount = Math.round(subtotal * 0.08 * 100) / 100;
+  const totalAmount = Math.round((subtotal + shippingAmount + taxAmount) * 100) / 100;
+
+  if (totalAmount <= 0 || isNaN(totalAmount)) {
+    throw new Error(`Invalid calculated order total: ${totalAmount}`);
+  }
 
   return {
     lineItems,
@@ -79,6 +132,11 @@ export class StripePaymentProvider implements PaymentProvider {
         },
         quantity: 1,
       });
+    }
+
+    const calculatedTotal = (line_items.reduce((sum: number, item: any) => sum + (item.price_data.unit_amount * item.quantity), 0)) / 100;
+    if (Math.abs(calculatedTotal - orderData.totalAmount) > 0.05) {
+      throw new Error(`Checkout total mismatch: line items sum to $${calculatedTotal}, but order total is $${orderData.totalAmount}`);
     }
 
     const session = await stripe.checkout.sessions.create({

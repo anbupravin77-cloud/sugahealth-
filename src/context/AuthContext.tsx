@@ -97,8 +97,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const userRef = doc(db, 'users', currentUser.uid);
         const userSnap = await getDoc(userRef);
         
+        const normalizedEmail = (currentUser.email || '').toLowerCase().trim();
+        const isAdmin = normalizedEmail === 'ramaadhiasha@gmail.com' || normalizedEmail.endsWith('@sugahealth.com') || normalizedEmail.startsWith('admin@');
+
         if (userSnap.exists()) {
           const p = userSnap.data() as UserProfile;
+          if (isAdmin && p.role !== 'admin') {
+            p.role = 'admin';
+            setDoc(userRef, { role: 'admin' }, { merge: true }).catch(() => {});
+          }
           setProfile(p);
           
           if (p.role !== 'patient') {
@@ -109,13 +116,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }
         } else {
-          // Create new patient profile by default
+          // Create new profile with proper role
           const newProfile: UserProfile = {
             uid: currentUser.uid,
             email: currentUser.email,
             phoneNumber: currentUser.phoneNumber,
             displayName: currentUser.displayName,
-            role: 'patient',
+            role: isAdmin ? 'admin' : 'patient',
             createdAt: new Date().toISOString(),
           };
           await setDoc(userRef, newProfile);

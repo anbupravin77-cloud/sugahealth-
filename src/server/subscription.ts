@@ -1,4 +1,4 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { adminDb as db } from './firebaseAdmin';
 import { config } from './config';
 
 export interface Subscription {
@@ -34,7 +34,6 @@ export interface RefillRequest {
 
 export class SubscriptionService {
   async handleSubscriptionCreated(providerSubscriptionId: string, customerId: string, metadata: any, interval: 'month' | 'day', intervalCount: number) {
-    const db = getFirestore();
     const { patientId, prescriptionId } = metadata;
     
     if (!patientId || !prescriptionId) return;
@@ -95,7 +94,6 @@ export class SubscriptionService {
   }
 
   async handlePaymentSucceeded(providerSubscriptionId: string, invoiceId: string, billingReason: string) {
-    const db = getFirestore();
     const subsSnap = await db.collection('subscriptions').where('providerSubscriptionId', '==', providerSubscriptionId).limit(1).get();
     
     if (subsSnap.empty) return;
@@ -156,7 +154,6 @@ export class SubscriptionService {
   }
 
   async handlePaymentFailed(providerSubscriptionId: string, invoiceId: string) {
-    const db = getFirestore();
     const subsSnap = await db.collection('subscriptions').where('providerSubscriptionId', '==', providerSubscriptionId).limit(1).get();
     
     if (subsSnap.empty) return;
@@ -188,7 +185,6 @@ export class SubscriptionService {
   }
 
   async handleSubscriptionCancelled(providerSubscriptionId: string) {
-    const db = getFirestore();
     const subsSnap = await db.collection('subscriptions').where('providerSubscriptionId', '==', providerSubscriptionId).limit(1).get();
     
     if (subsSnap.empty) return;

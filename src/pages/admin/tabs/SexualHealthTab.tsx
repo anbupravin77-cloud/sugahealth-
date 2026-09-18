@@ -12,22 +12,55 @@ export function SexualHealthTab(props: SexualHealthTabProps) {
   const onChange = props?.onChange || (() => {});
 
   const addCondition = () => {
-    onChange({ ...data, conditions: [...data.conditions, { title: 'New Condition', desc: 'Desc' }] });
+    const num = `0${(data.conditions?.length || 0) + 1}`;
+    onChange({
+      ...data,
+      conditions: [
+        ...(data.conditions || []),
+        {
+          num,
+          title: 'New Clinical Focus',
+          stat: '90% Clinical Efficacy',
+          desc: 'Targeted formulation prescribed based on health intake.',
+          meds: 'Custom Compounded Dosing',
+          buttonText: 'Start Consultation',
+          buttonLink: '/consultation'
+        }
+      ]
+    });
   };
   const removeCondition = (idx: number) => {
-    onChange({ ...data, conditions: data.conditions.filter((_, i) => i !== idx) });
+    onChange({ ...data, conditions: (data.conditions || []).filter((_, i) => i !== idx) });
   };
   const addCardioPara = () => {
-    onChange({ ...data, cardiovascular: { ...data.cardiovascular, paragraphs: [...data.cardiovascular.paragraphs, 'New Paragraph'] } });
+    onChange({
+      ...data,
+      cardiovascular: {
+        ...data.cardiovascular,
+        paragraphs: [...(data.cardiovascular.paragraphs || []), 'Physicians assess cardiovascular indicators prior to protocol issuance.']
+      }
+    });
   };
   const removeCardioPara = (idx: number) => {
-    onChange({ ...data, cardiovascular: { ...data.cardiovascular, paragraphs: data.cardiovascular.paragraphs.filter((_, i) => i !== idx) } });
+    onChange({
+      ...data,
+      cardiovascular: {
+        ...data.cardiovascular,
+        paragraphs: (data.cardiovascular.paragraphs || []).filter((_, i) => i !== idx)
+      }
+    });
   };
   const addPrivacy = () => {
-    onChange({ ...data, privacy: [...data.privacy, { title: 'New Title', desc: 'Desc' }] });
+    onChange({
+      ...data,
+      privacy: [
+        ...(data.privacy || []),
+        { title: 'Discreet Delivery', desc: 'Shipped in tamper-evident, unmarked discreet packaging.' }
+      ]
+    });
   };
   const removePrivacy = (idx: number) => {
-    onChange({ ...data, privacy: data.privacy.filter((_, i) => i !== idx) });
+    onChange({ ...data, privacy: (data.privacy || []).filter((_, i) => i !== idx) });
   };
 
   const updateCondition = (idx: number, field: string, val: string) => {
@@ -84,9 +117,32 @@ export function SexualHealthTab(props: SexualHealthTabProps) {
 
       {/* Conditions / Targeted Treatment Pathways */}
       <div className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-4">
-        <h3 className="font-sans text-base font-bold text-neutral-950">Conditions & Clinical Pathways</h3>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-sans text-base font-bold text-neutral-950">Conditions & Clinical Pathways</h3>
+            <p className="text-xs text-neutral-500">Targeted therapeutic focus areas and clinical statistics.</p>
+          </div>
+          <button
+            type="button"
+            onClick={addCondition}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+          >
+            <Plus size={14} /> Add Pathway
+          </button>
+        </div>
         {data.conditions.map((cond, idx) => (
           <div key={idx} className="p-4 rounded-xl bg-neutral-50 border border-neutral-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-neutral-500 uppercase">Pathway #{idx + 1}</span>
+              <button
+                type="button"
+                onClick={() => removeCondition(idx)}
+                className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                title="Remove pathway"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">Condition / Pathway Title</label>
@@ -180,7 +236,16 @@ export function SexualHealthTab(props: SexualHealthTabProps) {
         </div>
 
         <div className="space-y-2">
-          <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700">Paragraphs</label>
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700">Paragraphs</label>
+            <button
+              type="button"
+              onClick={addCardioPara}
+              className="text-[11px] font-bold text-neutral-900 hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              <Plus size={12} /> Add Paragraph
+            </button>
+          </div>
           {data.cardiovascular.paragraphs.map((para, pIdx) => (
             <div key={pIdx} className="flex gap-2 mb-2 items-start relative">
               <textarea
@@ -189,7 +254,7 @@ export function SexualHealthTab(props: SexualHealthTabProps) {
                 onChange={(e) => updateCardioParagraph(pIdx, e.target.value)}
                 className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 leading-relaxed pr-8"
               />
-              <button type="button" onClick={() => removeCardioPara(pIdx)} className="absolute top-2 right-2 text-red-500"><Trash2 size={16}/></button>
+              <button type="button" onClick={() => removeCardioPara(pIdx)} className="absolute top-2 right-2 text-red-500 cursor-pointer"><Trash2 size={16}/></button>
             </div>
           ))}
         </div>
@@ -236,9 +301,32 @@ export function SexualHealthTab(props: SexualHealthTabProps) {
 
       {/* Discretion & Privacy */}
       <div className="bg-white p-6 rounded-2xl border border-neutral-200 space-y-4">
-        <h3 className="font-sans text-base font-bold text-neutral-950">Patient Discretion & Packaging</h3>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-sans text-base font-bold text-neutral-950">Patient Discretion & Packaging</h3>
+            <p className="text-xs text-neutral-500">Packaging and confidential delivery guarantees.</p>
+          </div>
+          <button
+            type="button"
+            onClick={addPrivacy}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-neutral-950 text-white text-xs font-bold hover:bg-neutral-800 transition-colors cursor-pointer shadow-xs"
+          >
+            <Plus size={14} /> Add Feature
+          </button>
+        </div>
         {data.privacy.map((pr, idx) => (
           <div key={idx} className="p-4 rounded-xl bg-neutral-50 border border-neutral-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-neutral-500 uppercase">Feature #{idx + 1}</span>
+              <button
+                type="button"
+                onClick={() => removePrivacy(idx)}
+                className="text-neutral-400 hover:text-red-600 transition-colors p-1 cursor-pointer"
+                title="Remove feature"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
             <div>
               <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">Feature Title</label>
               <input

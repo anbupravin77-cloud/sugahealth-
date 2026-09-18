@@ -28,7 +28,7 @@ export function GlobalTab(props: GlobalTabProps) {
   };
 
   const updateFooterTreatment = (index: number, field: 'label' | 'path', val: string) => {
-    const updated = [...data.footer.treatmentLinks];
+    const updated = [...(data.footer.treatmentLinks || [])];
     updated[index] = { ...updated[index], [field]: val };
     onChange({
       ...data,
@@ -36,9 +36,41 @@ export function GlobalTab(props: GlobalTabProps) {
     });
   };
 
+  const addFooterTreatment = () => {
+    const updated = [...(data.footer.treatmentLinks || []), { label: 'New Treatment', path: '/consultation' }];
+    onChange({
+      ...data,
+      footer: { ...data.footer, treatmentLinks: updated },
+    });
+  };
+
+  const removeFooterTreatment = (index: number) => {
+    const updated = (data.footer.treatmentLinks || []).filter((_, i) => i !== index);
+    onChange({
+      ...data,
+      footer: { ...data.footer, treatmentLinks: updated },
+    });
+  };
+
   const updateFooterPractice = (index: number, field: 'label' | 'path', val: string) => {
-    const updated = [...data.footer.practiceLinks];
+    const updated = [...(data.footer.practiceLinks || [])];
     updated[index] = { ...updated[index], [field]: val };
+    onChange({
+      ...data,
+      footer: { ...data.footer, practiceLinks: updated },
+    });
+  };
+
+  const addFooterPractice = () => {
+    const updated = [...(data.footer.practiceLinks || []), { label: 'New Practice Link', path: '/about' }];
+    onChange({
+      ...data,
+      footer: { ...data.footer, practiceLinks: updated },
+    });
+  };
+
+  const removeFooterPractice = (index: number) => {
+    const updated = (data.footer.practiceLinks || []).filter((_, i) => i !== index);
     onChange({
       ...data,
       footer: { ...data.footer, practiceLinks: updated },
@@ -221,6 +253,92 @@ export function GlobalTab(props: GlobalTabProps) {
               onChange={(e) => onChange({ ...data, footer: { ...data.footer, copyright: e.target.value } })}
               className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-950"
             />
+          </div>
+
+          {/* Footer Treatment Links */}
+          <div className="pt-4 border-t border-neutral-100">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700">
+                Footer Clinical Treatment Links
+              </label>
+              <button
+                type="button"
+                onClick={addFooterTreatment}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-neutral-900 text-white text-[11px] font-bold hover:bg-neutral-800 cursor-pointer"
+              >
+                <Plus size={12} /> Add Treatment Link
+              </button>
+            </div>
+            <div className="space-y-2">
+              {(data.footer.treatmentLinks || []).map((tl, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={tl.label}
+                    onChange={(e) => updateFooterTreatment(idx, 'label', e.target.value)}
+                    placeholder="Link Label"
+                    className="flex-1 px-2.5 py-1.5 text-xs rounded border border-neutral-300 focus:outline-none focus:ring-1 focus:ring-neutral-950"
+                  />
+                  <input
+                    type="text"
+                    value={tl.path}
+                    onChange={(e) => updateFooterTreatment(idx, 'path', e.target.value)}
+                    placeholder="Path (/weight-loss)"
+                    className="flex-1 px-2.5 py-1.5 text-xs font-mono rounded border border-neutral-300 focus:outline-none focus:ring-1 focus:ring-neutral-950"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeFooterTreatment(idx)}
+                    className="p-1.5 text-neutral-400 hover:text-red-600 cursor-pointer"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Footer Practice Links */}
+          <div className="pt-4 border-t border-neutral-100">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700">
+                Footer Practice Links
+              </label>
+              <button
+                type="button"
+                onClick={addFooterPractice}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-neutral-900 text-white text-[11px] font-bold hover:bg-neutral-800 cursor-pointer"
+              >
+                <Plus size={12} /> Add Practice Link
+              </button>
+            </div>
+            <div className="space-y-2">
+              {(data.footer.practiceLinks || []).map((pl, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={pl.label}
+                    onChange={(e) => updateFooterPractice(idx, 'label', e.target.value)}
+                    placeholder="Link Label"
+                    className="flex-1 px-2.5 py-1.5 text-xs rounded border border-neutral-300 focus:outline-none focus:ring-1 focus:ring-neutral-950"
+                  />
+                  <input
+                    type="text"
+                    value={pl.path}
+                    onChange={(e) => updateFooterPractice(idx, 'path', e.target.value)}
+                    placeholder="Path (/#doctors)"
+                    className="flex-1 px-2.5 py-1.5 text-xs font-mono rounded border border-neutral-300 focus:outline-none focus:ring-1 focus:ring-neutral-950"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeFooterPractice(idx)}
+                    className="p-1.5 text-neutral-400 hover:text-red-600 cursor-pointer"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>

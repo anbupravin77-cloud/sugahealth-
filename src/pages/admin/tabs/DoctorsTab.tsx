@@ -41,11 +41,11 @@ export function DoctorsTab(props: DoctorsTabProps) {
   };
 
   const handleDelete = (idx: number) => {
-    if (true) {
-      const updated = doctors.filter((_, i) => i !== idx);
-      onChange(updated);
-      if (editingIdx === idx) setEditingIdx(null);
-    }
+    const confirmed = window.confirm("Are you sure you want to remove this clinician from the medical team?");
+    if (!confirmed) return;
+    const updated = doctors.filter((_, i) => i !== idx);
+    onChange(updated);
+    if (editingIdx === idx) setEditingIdx(null);
   };
 
   const updateCurrent = (field: keyof Doctor, val: any) => {
