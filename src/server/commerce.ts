@@ -1,91 +1,14 @@
 import crypto from 'crypto';
 import Stripe from 'stripe';
 import { config } from './config';
+import { pricingService, MedicationPricingItem, CalculatedOrderTotals } from './services/pricingService';
 
-const FORMULARY_PRICES: Record<string, number> = {
-  'semaglutide': 199.00,
-  'tirzepatide': 299.00,
-  'finasteride': 45.00,
-  'minoxidil': 39.00,
-  'tadalafil': 48.00,
-  'sildenafil': 35.00,
-  'enclomiphene': 89.00,
-  'dutasteride': 49.00,
-  'nad+': 149.00,
-  'b12': 49.00,
-};
-
-function resolveMedicationUnitPrice(med: any): number {
-  if (typeof med.unitPrice === 'number' && !isNaN(med.unitPrice) && med.unitPrice > 0) {
-    return med.unitPrice;
-  }
-  if (typeof med.price === 'number' && !isNaN(med.price) && med.price > 0) {
-    return med.price;
-  }
-  const name = String(med.medicationName || '').toLowerCase();
-  const ingredient = String(med.activeIngredient || '').toLowerCase();
-
-  for (const [key, price] of Object.entries(FORMULARY_PRICES)) {
-    if (name.includes(key) || ingredient.includes(key)) {
-      return price;
-    }
-  }
-
-  return 45.00;
-}
-
-function resolveQuantity(med: any): number {
-  if (typeof med.quantity === 'number' && !isNaN(med.quantity) && med.quantity >= 1) {
-    return Math.floor(med.quantity);
-  }
-  if (typeof med.quantity === 'string') {
-    const match = med.quantity.match(/\d+/);
-    if (match) {
-      const parsed = parseInt(match[0], 10);
-      if (!isNaN(parsed) && parsed >= 1) return parsed;
-    }
-  }
-  return 1;
-}
-
-export function calculateOrderTotals(medications: any[]) {
-  if (!Array.isArray(medications) || medications.length === 0) {
-    throw new Error('Cannot calculate order totals: medications array is empty');
-  }
-
-  const lineItems = medications.map((med) => {
-    const unitPrice = resolveMedicationUnitPrice(med);
-    const quantity = resolveQuantity(med);
-    const totalPrice = Math.round(unitPrice * quantity * 100) / 100;
-
-    return {
-      medicationName: med.medicationName || 'Compounded Medication',
-      activeIngredient: med.activeIngredient || '',
-      quantity,
-      unitPrice,
-      totalPrice
-    };
-  });
-
-  const subtotal = Math.round(lineItems.reduce((acc, item) => acc + item.totalPrice, 0) * 100) / 100;
-  const shippingAmount = subtotal > 0 ? 15.00 : 0;
-  const taxAmount = Math.round(subtotal * 0.08 * 100) / 100;
-  const totalAmount = Math.round((subtotal + shippingAmount + taxAmount) * 100) / 100;
-
-  if (totalAmount <= 0 || isNaN(totalAmount)) {
-    throw new Error(`Invalid calculated order total: ${totalAmount}`);
-  }
-
-  return {
-    lineItems,
-    subtotal,
-    shippingAmount,
-    taxAmount,
-    totalAmount
-  };
+export function calculateOrderTotals(medications: any[]): CalculatedOrderTotals {
+  return pricingService.calculateTotals(medications);
 }
 
 export interface PaymentProvider {
+
   createPaymentSession(orderId: string, orderData: any): Promise<{ url: string, paymentReference: string }>;
   createSubscriptionSession(patientId: string, patientEmail: string, prescriptionId: string, prescriptionData: any): Promise<{ url: string, paymentReference: string }>;
   verifyWebhookSignature(payload: string, signature: string, secret: string): boolean;

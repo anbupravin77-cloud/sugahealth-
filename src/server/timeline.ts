@@ -20,7 +20,25 @@ export class TimelineService {
     };
 
     await db.collection('order_events').doc(eventId).set(fullEvent);
+
+    // Dual-write to Supabase order_events
+    try {
+      const { orderRepository } = await import('./repositories/orderRepository');
+      await orderRepository.createOrderEvent({
+        id: eventId,
+        order_id: event.orderId || '',
+        consultation_id: event.consultationId || null,
+        event_type: event.eventType,
+        actor_type: event.actorType,
+        actor_id: event.actorId,
+        metadata: event.metadata || null,
+      });
+    } catch (err: any) {
+      console.warn('[TimelineService] Supabase dual-write error:', err.message);
+    }
+
     return fullEvent;
+
   }
 
   async getEventsForOrder(orderId: string) {

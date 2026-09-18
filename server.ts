@@ -69,202 +69,15 @@ function saveStorageAtomic(data: StorageSchema): void {
 // Initialize storage in memory
 storage = loadStorage();
 
-function isAdminUser(decodedToken: any): boolean {
-  if (!decodedToken) return false;
-  if (decodedToken.role === 'admin' || decodedToken.admin === true) return true;
-  const email = (decodedToken.email || '').toLowerCase().trim();
-  if (!email) return false;
-  return email === 'ramaadhiasha@gmail.com' || email.endsWith('@sugahealth.com') || email.startsWith('admin@');
-}
+// Normalized, server-controlled authentication & role authorization middleware
+import {
+  requireAuth,
+  requireAdminAuth,
+  requireDoctorAuth,
+  requirePharmacistAuth,
+  requireStaffAuth,
+} from './src/server/auth';
 
-function isDoctorUser(decodedToken: any): boolean {
-  if (!decodedToken) return false;
-  if (isAdminUser(decodedToken)) return true;
-  if (decodedToken.role === 'doctor') return true;
-  const email = (decodedToken.email || '').toLowerCase().trim();
-  return email ? (email.includes('doctor') || email.includes('dr.') || email.endsWith('@sugahealth.com')) : false;
-}
-
-function isPharmacistUser(decodedToken: any): boolean {
-  if (!decodedToken) return false;
-  if (isAdminUser(decodedToken)) return true;
-  if (decodedToken.role === 'pharmacist') return true;
-  const email = (decodedToken.email || '').toLowerCase().trim();
-  return email ? (email.includes('pharm') || email.includes('rx') || email.endsWith('@sugahealth.com')) : false;
-}
-
-// Auth middleware using Firebase Admin
-async function requireAdminAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized: Missing authentication token' });
-    return;
-  }
-
-  const token = authHeader.slice(7).trim();
-
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    
-    // Check if user is an admin by claims or email
-    if (isAdminUser(decodedToken)) {
-      (req as any).user = { ...decodedToken, role: 'admin' };
-      return next();
-    }
-
-    // Check role in Firestore safely without noisy warnings
-    let role = decodedToken.role;
-    if (!role) {
-      try {
-        const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-        role = userDoc.exists ? userDoc.data()?.role : null;
-      } catch {
-        // Fallback gracefully in environments without direct Firestore IAM
-      }
-    }
-    
-    if (role !== 'admin') {
-      res.status(403).json({ error: 'Forbidden: Insufficient permissions' });
-      return;
-    }
-    
-    (req as any).user = { ...decodedToken, role: 'admin' };
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Session expired or invalid. Please log in again.' });
-  }
-}
-
-// Ensure the token has the correct staff role for onboarding
-async function requireStaffAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  const token = authHeader.slice(7).trim();
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    if (isAdminUser(decodedToken)) {
-      (req as any).user = { ...decodedToken, role: 'admin' };
-      return next();
-    }
-    if (isDoctorUser(decodedToken)) {
-      (req as any).user = { ...decodedToken, role: 'doctor' };
-      return next();
-    }
-    if (isPharmacistUser(decodedToken)) {
-      (req as any).user = { ...decodedToken, role: 'pharmacist' };
-      return next();
-    }
-    
-    let role = decodedToken.role;
-    if (!role) {
-      try {
-        const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-        role = userDoc.exists ? userDoc.data()?.role : null;
-      } catch {
-        // Fallback gracefully
-      }
-    }
-    
-    if (role !== 'doctor' && role !== 'pharmacist' && role !== 'admin') {
-      res.status(403).json({ error: 'Forbidden' });
-      return;
-    }
-    (req as any).user = { ...decodedToken, role };
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid session' });
-  }
-}
-
-// Doctor or Admin only
-async function requireDoctorAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  const token = authHeader.slice(7).trim();
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    if (isAdminUser(decodedToken) || isDoctorUser(decodedToken)) {
-      (req as any).user = { ...decodedToken, role: 'doctor' };
-      return next();
-    }
-    let role = decodedToken.role;
-    if (!role) {
-      try {
-        const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-        role = userDoc.exists ? userDoc.data()?.role : null;
-      } catch {
-        // Fallback gracefully
-      }
-    }
-    
-    if (role !== 'doctor' && role !== 'admin') {
-      res.status(403).json({ error: 'Forbidden' });
-      return;
-    }
-    (req as any).user = { ...decodedToken, role };
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid session' });
-  }
-}
-
-// Pharmacist or Admin only
-async function requirePharmacistAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  const token = authHeader.slice(7).trim();
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    if (isAdminUser(decodedToken) || isPharmacistUser(decodedToken)) {
-      (req as any).user = { ...decodedToken, role: 'pharmacist' };
-      return next();
-    }
-    let role = decodedToken.role;
-    if (!role) {
-      try {
-        const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-        role = userDoc.exists ? userDoc.data()?.role : null;
-      } catch {
-        // Fallback gracefully
-      }
-    }
-    
-    if (role !== 'pharmacist' && role !== 'admin') {
-      res.status(403).json({ error: 'Forbidden' });
-      return;
-    }
-    (req as any).user = { ...decodedToken, role };
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid session' });
-  }
-}
-
-// Basic auth for any logged in user
-async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  const token = authHeader.slice(7).trim();
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    (req as any).user = decodedToken;
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid session' });
-  }
-}
 
 import { config, validateProductionConfig } from './src/server/config';
 
@@ -391,6 +204,25 @@ async function startServer() {
       res.status(500).json({ error: 'Failed to reset content' });
     }
   });
+
+  // Admin: Safe Development Test Data Cleanup (strictly blocked in production)
+  app.post('/api/admin/dev/test-data/cleanup', requireAdminAuth, async (req, res) => {
+    try {
+      const { testUserId, testUserEmail } = req.body || {};
+      if (!testUserId || !testUserEmail) {
+        return res.status(400).json({ error: 'testUserId and testUserEmail are required' });
+      }
+      const decodedToken = (req as any).user;
+      const { testDataSafetyService } = await import('./src/server/services/testDataService');
+      await testDataSafetyService.resetDesignatedTestAccount(testUserId, testUserEmail, decodedToken.uid);
+      res.json({ success: true, message: `Designated test account ${testUserEmail} safely reset.` });
+    } catch (err: any) {
+      console.error('Error during test data cleanup:', err);
+      res.status(err.message?.includes('SECURITY VIOLATION') ? 403 : 500).json({ error: err.message || 'Internal Error' });
+    }
+  });
+
+
 
   // Admin: Upload image (supports base64 data URL payload)
   app.post('/api/admin/upload', requireAdminAuth, (req, res) => {

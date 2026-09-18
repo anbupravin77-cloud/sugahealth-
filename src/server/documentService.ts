@@ -35,6 +35,25 @@ export async function generateConsultationDocument(db: FirebaseFirestore.Firesto
     fileSize: pdfBuffer.length
   });
 
+  // Dual-write metadata to Supabase clinical_documents
+  try {
+    const { documentRepository } = await import('./repositories/documentRepository');
+    await documentRepository.recordDocument({
+      legacy_document_id: docId,
+      document_type: 'consultation',
+      source_entity_id: consultationId,
+      patient_id: consultation.patientId,
+      doctor_id: consultation.assignedTo || null,
+      storage_path: storagePath,
+      file_size: pdfBuffer.length,
+      version: 1,
+      status: 'active',
+      generated_by: actorUid,
+    });
+  } catch (err: any) {
+    console.warn('[DocumentService] Supabase document record fallback:', err.message);
+  }
+
   await db.collection('audit_logs').add({
     action: 'CONSULTATION_DOCUMENT_GENERATED',
     actorUid,
@@ -43,8 +62,22 @@ export async function generateConsultationDocument(db: FirebaseFirestore.Firesto
     timestamp
   });
 
+  try {
+    const { auditRepository } = await import('./repositories/auditRepository');
+    await auditRepository.log({
+      action: 'CONSULTATION_DOCUMENT_GENERATED',
+      actorUid,
+      consultationId,
+      documentId: docId,
+      metadata: { storagePath, fileSize: pdfBuffer.length },
+    });
+  } catch (err: any) {
+    console.warn('[DocumentService] Supabase audit log fallback:', err.message);
+  }
+
   return docId;
 }
+
 
 export async function generatePrescriptionDocument(db: FirebaseFirestore.Firestore, prescriptionId: string, actorUid: string) {
   const rxSnap = await db.collection('prescriptions').doc(prescriptionId).get();
@@ -108,6 +141,26 @@ export async function generatePrescriptionDocument(db: FirebaseFirestore.Firesto
 
   await batch.commit();
 
+  // Dual-write metadata to Supabase clinical_documents
+  try {
+    const { documentRepository } = await import('./repositories/documentRepository');
+    await documentRepository.archiveOlderVersions(prescriptionId, 'prescription');
+    await documentRepository.recordDocument({
+      legacy_document_id: docId,
+      document_type: 'prescription',
+      source_entity_id: prescriptionId,
+      patient_id: prescription.patientId,
+      doctor_id: prescription.doctorId,
+      storage_path: storagePath,
+      file_size: pdfBuffer.length,
+      version: nextVersion,
+      status: 'active',
+      generated_by: actorUid,
+    });
+  } catch (err: any) {
+    console.warn('[DocumentService] Supabase prescription document record fallback:', err.message);
+  }
+
   await db.collection('audit_logs').add({
     action: nextVersion > 1 ? 'PRESCRIPTION_DOCUMENT_REGENERATED' : 'PRESCRIPTION_DOCUMENT_GENERATED',
     actorUid,
@@ -117,14 +170,55 @@ export async function generatePrescriptionDocument(db: FirebaseFirestore.Firesto
     timestamp
   });
 
+  try {
+    const { auditRepository } = await import('./repositories/auditRepository');
+    await auditRepository.log({
+      action: nextVersion > 1 ? 'PRESCRIPTION_DOCUMENT_REGENERATED' : 'PRESCRIPTION_DOCUMENT_GENERATED',
+      actorUid,
+      consultationId,
+      prescriptionId,
+      documentId: docId,
+      metadata: { storagePath, fileSize: pdfBuffer.length, version: nextVersion },
+    });
+  } catch (err: any) {
+    console.warn('[DocumentService] Supabase audit log fallback:', err.message);
+  }
+
   return docId;
 }
 
 export async function getDocumentStream(db: FirebaseFirestore.Firestore, documentId: string) {
+  let docData: any = null;
+
   const docSnap = await db.collection('documents').doc(documentId).get();
-  if (!docSnap.exists) throw new Error('Document not found');
+  if (docSnap.exists) {
+    docData = docSnap.data();
+  } else {
+    // Check Supabase clinical_documents
+    try {
+      const { documentRepository } = await import('./repositories/documentRepository');
+      const supabaseDoc = await documentRepository.getById(documentId) || await documentRepository.getByLegacyId(documentId);
+      if (supabaseDoc) {
+        docData = {
+          documentType: supabaseDoc.document_type,
+          sourceEntityId: supabaseDoc.source_entity_id,
+          patientId: supabaseDoc.patient_id,
+          doctorId: supabaseDoc.doctor_id,
+          storagePath: supabaseDoc.storage_path,
+          fileSize: supabaseDoc.file_size,
+          status: supabaseDoc.status,
+        };
+      }
+    } catch (err: any) {
+      console.warn('[DocumentService] Supabase getDocumentStream check failed:', err.message);
+    }
+  }
+
+  if (!docData) {
+    throw new Error('Document not found');
+  }
   
-  const docData = docSnap.data() as any;
   const buffer = await downloadPdf(docData.storagePath);
   return { buffer, metadata: docData };
 }
+

@@ -72,7 +72,29 @@ export class SubscriptionService {
 
     await db.collection('subscriptions').doc(subId).set(subscription);
     
+    // Dual-write to Supabase subscriptions
+    try {
+      const { subscriptionRepository } = await import('./repositories/subscriptionRepository');
+      await subscriptionRepository.createSubscription({
+        id: subId,
+        patient_id: patientId,
+        source_prescription_id: prescriptionId,
+        treatment_name: subscription.treatmentName,
+        provider: 'stripe',
+        billing_interval: interval,
+        interval_count: intervalCount,
+        status: 'active',
+        provider_customer_id: customerId,
+        provider_subscription_id: providerSubscriptionId,
+      });
+    } catch (err: any) {
+      console.warn('[SubscriptionService] Supabase dual-write error:', err.message);
+    }
+
+
+
     await db.collection('audit_logs').add({
+
       action: 'SUBSCRIPTION_CREATED',
       actorUid: 'system',
       subscriptionId: subId,
@@ -123,6 +145,24 @@ export class SubscriptionService {
     };
 
     await db.collection('refill_requests').doc(refillRequestId).set(refillReq);
+
+    // Dual-write to Supabase refill requests
+    try {
+      const { subscriptionRepository } = await import('./repositories/subscriptionRepository');
+      await subscriptionRepository.createRefillRequest({
+        id: refillRequestId,
+        patient_id: subData.patientId,
+        source_prescription_id: subData.sourcePrescriptionId,
+        subscription_id: subData.subscriptionId,
+        status: 'pending_review',
+        idempotency_key: idempotencyKey,
+      });
+    } catch (err: any) {
+      console.warn('[SubscriptionService] Supabase refill request dual-write error:', err.message);
+    }
+
+
+
 
     await db.collection('audit_logs').add({
       action: 'RENEWAL_PAYMENT_VERIFIED',
@@ -197,6 +237,15 @@ export class SubscriptionService {
       cancelledAt: new Date().toISOString(),
       updatedAt: new Date().toISOString() 
     });
+
+    // Dual-write cancellation to Supabase
+    try {
+      const { subscriptionRepository } = await import('./repositories/subscriptionRepository');
+      await subscriptionRepository.updateSubscriptionStatus(subData.subscriptionId, 'cancelled');
+    } catch (err: any) {
+      console.warn('[SubscriptionService] Supabase cancel status error:', err.message);
+    }
+
 
     await db.collection('audit_logs').add({
       action: 'SUBSCRIPTION_CANCELLED',

@@ -42,7 +42,16 @@ export class MessagingService {
       timestamp
     });
 
+    // Dual-write to Supabase message_threads
+    try {
+      const { messageRepository } = await import('./repositories/messageRepository');
+      await messageRepository.ensureThread(patientId, doctorId, consultationId);
+    } catch (err: any) {
+      console.warn('[MessagingService] Supabase ensureThread error:', err.message);
+    }
+
     return threadId;
+
   }
 
   async sendMessage(threadId: string, senderUid: string, senderRole: 'patient' | 'doctor', text: string) {
@@ -102,6 +111,21 @@ export class MessagingService {
       messageId,
       timestamp
     });
+
+    // Dual-write message to Supabase
+    try {
+      const { messageRepository } = await import('./repositories/messageRepository');
+      await messageRepository.addMessage({
+        threadId,
+        senderUid,
+        senderRole,
+        text,
+        legacyMessageId: messageId,
+      });
+    } catch (err: any) {
+      console.warn('[MessagingService] Supabase addMessage error:', err.message);
+    }
+
 
     // Notification
     const notifService = new NotificationService();
