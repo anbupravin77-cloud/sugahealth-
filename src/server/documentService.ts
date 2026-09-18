@@ -1,6 +1,6 @@
 import { generateConsultationPdfBuffer, generatePrescriptionPdfBuffer } from './pdfGenerator';
 import { uploadPdf, downloadPdf } from './storageHelper';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 
 export async function generateConsultationDocument(db: FirebaseFirestore.Firestore, consultationId: string, actorUid: string) {
   const consultSnap = await db.collection('consultations').doc(consultationId).get();
@@ -14,7 +14,7 @@ export async function generateConsultationDocument(db: FirebaseFirestore.Firesto
   const pdfBuffer = await generateConsultationPdfBuffer(consultation, patient);
   
   // Create document metadata
-  const docId = uuidv4();
+  const docId = randomUUID();
   const storagePath = `consultations/${consultationId}/consultation_${docId}.pdf`;
   
   await uploadPdf(storagePath, pdfBuffer);
@@ -101,7 +101,7 @@ export async function generatePrescriptionDocument(db: FirebaseFirestore.Firesto
   // Generate PDF buffer
   const pdfBuffer = await generatePrescriptionPdfBuffer(prescription, consultation, patient, doctor);
   
-  const docId = uuidv4();
+  const docId = randomUUID();
   const storagePath = `prescriptions/${prescriptionId}/prescription_${docId}.pdf`;
   
   await uploadPdf(storagePath, pdfBuffer);
