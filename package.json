@@ -31,7 +31,7 @@
     "react-router-dom": "^7.18.4",
     "stripe": "^22.6.2",
     "tailwind-merge": "^3.7.0",
-    "uuid": "^14.0.2"
+    "uuid": "^11.1.0"
   },
   "packageManager": "bun@1.4.0",
   "devDependencies": {
