@@ -18,9 +18,15 @@ export function getSupabaseAdmin(): SupabaseClient {
         '[Supabase Admin] Warning: SUPABASE_URL or SUPABASE_SECRET_KEY is not defined in environment.'
       );
     }
+    const validUrl =
+      supabaseUrl && (supabaseUrl.startsWith('http://') || supabaseUrl.startsWith('https://'))
+        ? supabaseUrl
+        : 'https://placeholder.supabase.co';
+    const validKey = supabaseSecretKey || 'placeholder-secret-key';
+
     cachedAdminClient = createClient(
-      supabaseUrl || 'https://placeholder.supabase.co',
-      supabaseSecretKey || 'placeholder-secret-key',
+      validUrl,
+      validKey,
       {
         auth: {
           autoRefreshToken: false,
@@ -32,4 +38,11 @@ export function getSupabaseAdmin(): SupabaseClient {
   return cachedAdminClient;
 }
 
-export const supabaseAdmin = getSupabaseAdmin();
+export const supabaseAdmin = new Proxy({} as SupabaseClient, {
+  get(target, prop, receiver) {
+    const client = getSupabaseAdmin();
+    const value = Reflect.get(client, prop, receiver);
+    return typeof value === 'function' ? value.bind(client) : value;
+  },
+});
+

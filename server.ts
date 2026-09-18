@@ -1,7 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { createServer as createViteServer } from 'vite';
 import { defaultContent } from './src/data/defaultContent';
 import { SugaWebsiteContent } from './src/types/content';
 import { adminDb as db, adminAuth } from './src/server/firebaseAdmin';
@@ -19,12 +18,16 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'cms_content.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
 
-// Ensure storage directories exist
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+// Ensure storage directories exist safely (non-blocking for read-only serverless filesystems)
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+} catch (err) {
+  // Read-only filesystem in Vercel / serverless runtime
 }
 
 // In-memory active cache
@@ -40,7 +43,7 @@ function loadStorage(): StorageSchema {
       }
     }
   } catch (err) {
-    console.error('Failed to parse persistent storage, falling back to defaults:', err);
+    console.warn('Failed to parse persistent storage, falling back to defaults:', err);
   }
 
   const initial: StorageSchema = {
@@ -61,13 +64,22 @@ function saveStorageAtomic(data: StorageSchema): void {
     fs.renameSync(tmpFile, DATA_FILE);
     storage = data;
   } catch (err) {
-    console.error('Failed to write storage file atomically:', err);
-    throw err;
+    // In serverless / read-only filesystem environments, preserve data in-memory without crashing
+    storage = data;
   }
 }
 
-// Initialize storage in memory
-storage = loadStorage();
+// Initialize storage in memory safely
+try {
+  storage = loadStorage();
+} catch (err) {
+  storage = {
+    published: defaultContent,
+    draft: defaultContent,
+    lastPublishedAt: new Date().toISOString(),
+    lastDraftSavedAt: new Date().toISOString(),
+  };
+}
 
 // Normalized, server-controlled authentication & role authorization middleware
 import {
@@ -96,8 +108,8 @@ const PORT = 3000;
   // Serve static uploads
   app.use('/uploads', express.static(UPLOADS_DIR));
 
-  // Health check
-  app.get('/api/health', (req, res) => {
+  // Health check (supports both /api/health and /health)
+  app.get(['/api/health', '/health'], (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
@@ -2449,17 +2461,22 @@ const PORT = 3000;
   // Standalone server lifecycle (for AI Studio preview & Cloud Run container)
   if (process.env.VERCEL !== '1') {
     if (process.env.NODE_ENV !== 'production') {
-      createViteServer({
-        server: { middlewareMode: true },
-        appType: 'spa',
-      }).then((vite) => {
-        app.use(vite.middlewares);
-        app.listen(PORT, '0.0.0.0', () => {
-          console.log(`Suga.health full-stack server running on http://0.0.0.0:${PORT}`);
+      import('vite')
+        .then(({ createServer: createViteServer }) => {
+          return createViteServer({
+            server: { middlewareMode: true },
+            appType: 'spa',
+          });
+        })
+        .then((vite) => {
+          app.use(vite.middlewares);
+          app.listen(PORT, '0.0.0.0', () => {
+            console.log(`Suga.health full-stack server running on http://0.0.0.0:${PORT}`);
+          });
+        })
+        .catch((err) => {
+          console.error('Failed to start Vite dev server:', err);
         });
-      }).catch((err) => {
-        console.error('Failed to start Vite dev server:', err);
-      });
     } else {
       const distPath = path.join(process.cwd(), 'dist');
       app.use(express.static(distPath));
