@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
 import { Loader2, Mail, Smartphone, BellRing } from 'lucide-react';
 
 export function NotificationPreferences() {
@@ -8,12 +9,27 @@ export function NotificationPreferences() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+
+  const getAuthToken = async (): Promise<string | null> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user && typeof (user as any).getIdToken === 'function') {
+      try {
+        return await (user as any).getIdToken();
+      } catch {}
+    }
+    return null;
+  };
 
   useEffect(() => {
     async function load() {
       if (!user) return;
       try {
-        const token = await user.getIdToken();
+        const token = await getAuthToken();
+        if (!token) return;
         const res = await fetch('/api/notifications/preferences', {
           headers: { Authorization: `Bearer ${token}` }
         });
@@ -40,7 +56,12 @@ export function NotificationPreferences() {
     try {
       setSaving(true);
       setSuccess(false);
-      const token = await user.getIdToken();
+      setError('');
+      const token = await getAuthToken();
+      if (!token) {
+        setError('Authentication session required');
+        return;
+      }
       const res = await fetch('/api/notifications/preferences', {
         method: 'PATCH',
         headers: {
@@ -51,10 +72,14 @@ export function NotificationPreferences() {
       });
       if (res.ok) {
         setSuccess(true);
-        setTimeout(() => setSuccess(false), 3000);
+        setTimeout(() => setSuccess(false), 3500);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.error || 'Failed to update preferences');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setError(err.message || 'Failed to update preferences');
     } finally {
       setSaving(false);
     }

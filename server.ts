@@ -327,34 +327,108 @@ const PORT = 3000;
       const decodedToken = (req as any).user;
       const adminUid = decodedToken?.uid || 'admin';
       const timestamp = new Date().toISOString();
+      const displayName = `${firstName || ''} ${lastName || ''}`.trim() || email;
+      const formattedSpecialties = role === 'doctor' ? (Array.isArray(specialties) ? specialties : []) : null;
 
-      let targetUid = `staff_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      let targetUid = '';
       let setupLink = '';
 
-      // 1. Try to create or retrieve User in Firebase Auth if available
+      // 1. Provision user via canonical Supabase Auth Admin API
       try {
-        const userRecord = await adminAuth.createUser({
+        const { data: createData, error: createError } = await supabaseAdmin.auth.admin.createUser({
           email,
-          displayName: `${firstName || ''} ${lastName || ''}`.trim(),
-          emailVerified: false,
+          email_confirm: true,
+          user_metadata: {
+            first_name: firstName || null,
+            last_name: lastName || null,
+            displayName,
+            role,
+          },
+          app_metadata: {
+            role,
+          },
         });
-        targetUid = userRecord.uid;
-        await adminAuth.setCustomUserClaims(userRecord.uid, { role });
-        setupLink = await adminAuth.generatePasswordResetLink(email).catch(() => '');
-      } catch (authErr: any) {
-        console.warn('Firebase Auth user creation warning, proceeding with canonical persistence:', authErr.message);
-        // If user already exists in Auth, try to look them up
-        try {
-          const existing = await adminAuth.getUserByEmail(email);
-          if (existing) {
-            targetUid = existing.uid;
-            await adminAuth.setCustomUserClaims(existing.uid, { role });
+
+        if (createError) {
+          // If user already exists in Supabase Auth, find and update metadata
+          if (createError.message?.toLowerCase().includes('already') || createError.message?.toLowerCase().includes('exists')) {
+            const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+            const existingUser = listData?.users?.find(u => u.email?.toLowerCase() === email.toLowerCase());
+            if (existingUser) {
+              targetUid = existingUser.id;
+              await supabaseAdmin.auth.admin.updateUserById(targetUid, {
+                app_metadata: { role },
+                user_metadata: { role, first_name: firstName, last_name: lastName, displayName },
+              });
+            } else {
+              throw createError;
+            }
+          } else {
+            throw createError;
           }
-        } catch {}
+        } else if (createData?.user) {
+          targetUid = createData.user.id;
+        }
+
+        // Generate password reset / magic link for initial access
+        if (targetUid) {
+          try {
+            const { data: linkData } = await supabaseAdmin.auth.admin.generateLink({
+              type: 'recovery',
+              email,
+            });
+            if (linkData?.properties?.action_link) {
+              setupLink = linkData.properties.action_link;
+            }
+          } catch {}
+        }
+      } catch (authErr: any) {
+        console.warn('Supabase Auth user creation error:', authErr.message);
+        res.status(400).json({ error: authErr.message || 'Failed to provision staff auth account' });
+        return;
+      }
+
+      if (!targetUid) {
+        res.status(500).json({ error: 'Failed to establish staff account identifier' });
+        return;
       }
 
       if (!setupLink) {
         setupLink = `${req.protocol}://${req.get('host') || 'suga.health'}/doctor/login`;
+      }
+
+      // 2. Persist in canonical Supabase public.profiles table
+      try {
+        await supabaseAdmin.from('profiles').upsert({
+          id: targetUid,
+          email,
+          role,
+          first_name: firstName || null,
+          last_name: lastName || null,
+          display_name: displayName,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+      } catch (sbErr: any) {
+        console.warn('Supabase staff profile upsert warning:', sbErr.message);
+      }
+
+      // 3. Persist in canonical Supabase public.staff_profiles table
+      try {
+        await supabaseAdmin.from('staff_profiles').upsert({
+          id: targetUid,
+          email,
+          role,
+          active: true,
+          onboarding_status: 'completed',
+          first_name: firstName || null,
+          last_name: lastName || null,
+          specialties: formattedSpecialties,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+      } catch (sbErr: any) {
+        console.warn('Supabase staff_profiles upsert warning:', sbErr.message);
       }
 
       const staffProfile = {
@@ -366,59 +440,19 @@ const PORT = 3000;
         onboardingStatus: 'completed',
         firstName: firstName || null,
         lastName: lastName || null,
-        displayName: `${firstName || ''} ${lastName || ''}`.trim() || email,
-        specialties: role === 'doctor' ? (Array.isArray(specialties) ? specialties : []) : null,
+        displayName,
+        specialties: formattedSpecialties || [],
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-
-      // 2. Persist in canonical Supabase public.profiles table
-      try {
-        await supabaseAdmin.from('profiles').upsert({
-          id: targetUid,
-          email,
-          role,
-          first_name: firstName || null,
-          last_name: lastName || null,
-          display_name: staffProfile.displayName,
-          created_at: timestamp,
-          updated_at: timestamp,
-        });
-      } catch (sbErr: any) {
-        console.warn('Supabase staff profile upsert warning:', sbErr.message);
-      }
-
-      // 3. Mirror in Firestore if available
-      try {
-        await db.collection('staff_profiles').doc(targetUid).set(staffProfile);
-        await db.collection('users').doc(targetUid).set({
-          uid: targetUid,
-          email,
-          role,
-          displayName: staffProfile.displayName,
-          createdAt: staffProfile.createdAt,
-        });
-      } catch (fbErr: any) {
-        console.warn('Firestore staff mirror warning:', fbErr.message);
-      }
 
       // 4. Audit Log Event
       try {
         await supabaseAdmin.from('audit_logs').insert({
           action: 'STAFF_PROVISIONED',
           actor_uid: adminUid,
-          metadata: { targetUid, role, email, specialties: staffProfile.specialties },
+          metadata: { targetUid, role, email, specialties: formattedSpecialties },
           created_at: timestamp,
-        });
-      } catch {}
-
-      try {
-        await db.collection('audit_logs').add({
-          actorUid: adminUid,
-          targetUid,
-          action: 'STAFF_CREATED',
-          metadata: { role, email },
-          timestamp,
         });
       } catch {}
 
@@ -439,7 +473,36 @@ const PORT = 3000;
     try {
       const staffMap = new Map<string, any>();
 
-      // 1. Fetch from canonical Supabase profiles
+      // 1. Fetch from canonical Supabase staff_profiles table
+      try {
+        const { data: sbStaff, error: sbStaffError } = await supabaseAdmin
+          .from('staff_profiles')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (sbStaff && !sbStaffError) {
+          sbStaff.forEach((s: any) => {
+            staffMap.set(s.id, {
+              uid: s.id,
+              id: s.id,
+              email: s.email,
+              role: s.role,
+              active: s.active !== false,
+              onboardingStatus: s.onboarding_status || 'completed',
+              firstName: s.first_name,
+              lastName: s.last_name,
+              displayName: `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.email,
+              specialties: Array.isArray(s.specialties) ? s.specialties : [],
+              createdAt: s.created_at,
+              updatedAt: s.updated_at,
+            });
+          });
+        }
+      } catch (sbErr) {
+        console.warn('Supabase staff_profiles query warning:', sbErr);
+      }
+
+      // 2. Fetch profiles with staff roles to ensure complete directory
       try {
         const { data: sbProfiles, error: sbError } = await supabaseAdmin
           .from('profiles')
@@ -448,53 +511,26 @@ const PORT = 3000;
 
         if (sbProfiles && !sbError) {
           sbProfiles.forEach(p => {
-            staffMap.set(p.id, {
-              uid: p.id,
-              id: p.id,
-              email: p.email,
-              role: p.role,
-              active: true,
-              onboardingStatus: 'completed',
-              firstName: p.first_name,
-              lastName: p.last_name,
-              displayName: p.display_name || `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email,
-              specialties: [],
-              createdAt: p.created_at,
-              updatedAt: p.updated_at,
-            });
+            if (!staffMap.has(p.id)) {
+              staffMap.set(p.id, {
+                uid: p.id,
+                id: p.id,
+                email: p.email,
+                role: p.role,
+                active: true,
+                onboardingStatus: 'completed',
+                firstName: p.first_name,
+                lastName: p.last_name,
+                displayName: p.display_name || `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email,
+                specialties: [],
+                createdAt: p.created_at,
+                updatedAt: p.updated_at,
+              });
+            }
           });
         }
       } catch (sbErr) {
         console.warn('Supabase staff list fetch warning:', sbErr);
-      }
-
-      // 2. Fetch / Merge with Firestore staff_profiles
-      try {
-        const snapshot = await db.collection('staff_profiles').get();
-        snapshot.docs.forEach(doc => {
-          const data = doc.data();
-          const id = doc.id;
-          if (staffMap.has(id)) {
-            const existing = staffMap.get(id);
-            staffMap.set(id, {
-              ...existing,
-              ...data,
-              specialties: data.specialties || existing.specialties || [],
-              active: data.active !== undefined ? data.active : existing.active,
-              onboardingStatus: data.onboardingStatus || existing.onboardingStatus,
-            });
-          } else {
-            staffMap.set(id, {
-              uid: id,
-              id,
-              ...data,
-              specialties: data.specialties || [],
-              active: data.active !== undefined ? data.active : true,
-            });
-          }
-        });
-      } catch (fbErr) {
-        console.warn('Firestore staff list fetch warning:', fbErr);
       }
 
       const staffList = Array.from(staffMap.values());
@@ -520,35 +556,23 @@ const PORT = 3000;
       const adminUid = decodedToken?.uid || 'admin';
       const timestamp = new Date().toISOString();
 
-      // Disable/Enable in Firebase Auth
+      // 1. Update canonical Supabase public.staff_profiles record
       try {
-        await adminAuth.updateUser(uid, { disabled: !active });
-      } catch {}
+        await supabaseAdmin
+          .from('staff_profiles')
+          .update({ active, updated_at: timestamp })
+          .eq('id', uid);
+      } catch (sbErr: any) {
+        console.warn('Supabase staff_profiles status update warning:', sbErr.message);
+      }
 
-      // Update Firestore Profile
-      try {
-        await db.collection('staff_profiles').doc(uid).set({ 
-          active, 
-          updatedAt: timestamp 
-        }, { merge: true });
-      } catch {}
-
-      // Audit log
+      // 2. Audit log
       try {
         await supabaseAdmin.from('audit_logs').insert({
           action: active ? 'STAFF_ACCOUNT_ACTIVATED' : 'STAFF_ACCOUNT_DEACTIVATED',
           actor_uid: adminUid,
           metadata: { targetUid: uid, active },
           created_at: timestamp,
-        });
-      } catch {}
-
-      try {
-        await db.collection('audit_logs').add({
-          actorUid: adminUid,
-          targetUid: uid,
-          action: active ? 'ACCOUNT_ACTIVATED' : 'ACCOUNT_DEACTIVATED',
-          timestamp,
         });
       } catch {}
 

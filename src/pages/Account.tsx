@@ -21,6 +21,7 @@ export default function Account() {
   // Personal Info Form State
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
   const [dob, setDob] = useState('');
   const [sex, setSex] = useState<'male' | 'female' | 'other' | 'prefer-not-to-say' | ''>('');
   
@@ -32,7 +33,7 @@ export default function Account() {
     city: '',
     state: '',
     postalCode: '',
-    country: 'United States',
+    country: 'India',
     phoneNumber: ''
   });
 
@@ -40,11 +41,64 @@ export default function Account() {
   const [success, setSuccess] = useState('');
   const [error, setError] = useState('');
 
+  const INDIAN_STATES_AND_UTS = [
+    'Andhra Pradesh',
+    'Arunachal Pradesh',
+    'Assam',
+    'Bihar',
+    'Chhattisgarh',
+    'Goa',
+    'Gujarat',
+    'Haryana',
+    'Himachal Pradesh',
+    'Jharkhand',
+    'Karnataka',
+    'Kerala',
+    'Madhya Pradesh',
+    'Maharashtra',
+    'Manipur',
+    'Meghalaya',
+    'Mizoram',
+    'Nagaland',
+    'Odisha',
+    'Punjab',
+    'Rajasthan',
+    'Sikkim',
+    'Tamil Nadu',
+    'Telangana',
+    'Tripura',
+    'Uttar Pradesh',
+    'Uttarakhand',
+    'West Bengal',
+    'Andaman and Nicobar Islands',
+    'Chandigarh',
+    'Dadra and Nagar Haveli and Daman and Diu',
+    'Delhi',
+    'Jammu and Kashmir',
+    'Ladakh',
+    'Lakshadweep',
+    'Puducherry'
+  ];
+
+  const getAuthToken = async (): Promise<string | null> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user && typeof (user as any).getIdToken === 'function') {
+      try {
+        return await (user as any).getIdToken();
+      } catch {}
+    }
+    return null;
+  };
+
   // Load existing profile data
   useEffect(() => {
     if (profile) {
       setFirstName(profile.firstName || '');
       setLastName(profile.lastName || '');
+      setPhone(profile.phoneNumber || '');
       setDob(profile.dateOfBirth || '');
       setSex(profile.sex || '');
       
@@ -56,8 +110,8 @@ export default function Account() {
           city: profile.shippingAddress.city || '',
           state: profile.shippingAddress.state || '',
           postalCode: profile.shippingAddress.postalCode || '',
-          country: profile.shippingAddress.country || 'United States',
-          phoneNumber: profile.shippingAddress.phoneNumber || ''
+          country: profile.shippingAddress.country || 'India',
+          phoneNumber: profile.shippingAddress.phoneNumber || profile.phoneNumber || ''
         });
       }
     }
@@ -134,7 +188,11 @@ export default function Account() {
       setError('');
       setSuccess('');
       
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
+      if (!token) {
+        throw new Error('Authentication session required. Please sign in again.');
+      }
+
       const res = await fetch('/api/user/profile', {
         method: 'PATCH',
         headers: {
@@ -142,10 +200,11 @@ export default function Account() {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          firstName,
-          lastName,
-          dateOfBirth: dob,
-          sex
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phone: phone.trim() || undefined,
+          dateOfBirth: dob || null,
+          sex: sex || null
         })
       });
 
@@ -180,7 +239,11 @@ export default function Account() {
       setError('');
       setSuccess('');
       
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
+      if (!token) {
+        throw new Error('Authentication session required. Please sign in again.');
+      }
+
       const res = await fetch('/api/user/profile', {
         method: 'PATCH',
         headers: {
@@ -188,7 +251,10 @@ export default function Account() {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          shippingAddress: shipping
+          shippingAddress: {
+            ...shipping,
+            country: 'India'
+          }
         })
       });
 
@@ -204,7 +270,7 @@ export default function Account() {
       }
       
       await refreshProfile();
-      setSuccess('Personal information saved.');
+      setSuccess('Shipping address saved.');
       setTimeout(() => setSuccess(''), 4000);
     } catch (err: any) {
       console.error('[AccountProfileSave] Error:', err.message);
@@ -449,10 +515,12 @@ export default function Account() {
                       <label className="block text-sm font-medium text-neutral-700 mb-2">Phone Number</label>
                       <input
                         type="tel"
-                        value={profile?.phoneNumber || ''}
-                        disabled
-                        className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-500 cursor-not-allowed"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="+91 98765 43210"
+                        className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
                       />
+                      <p className="mt-1.5 text-xs text-neutral-400">10-digit Indian mobile number (+91)</p>
                     </div>
                   </div>
 
@@ -464,7 +532,6 @@ export default function Account() {
                         value={dob}
                         onChange={(e) => setDob(e.target.value)}
                         className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
-                        required
                       />
                     </div>
                     <div>
@@ -473,9 +540,8 @@ export default function Account() {
                         value={sex}
                         onChange={(e) => setSex(e.target.value as any)}
                         className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none bg-white"
-                        required
                       >
-                        <option value="" disabled>Select</option>
+                        <option value="">Select (Optional)</option>
                         <option value="male">Male</option>
                         <option value="female">Female</option>
                         <option value="other">Other</option>
@@ -520,7 +586,7 @@ export default function Account() {
                       value={shipping.line1}
                       onChange={(e) => setShipping({ ...shipping, line1: e.target.value })}
                       className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
-                      placeholder="Street address, P.O. box, etc."
+                      placeholder="Flat, House no., Building, Apartment"
                       required
                     />
                   </div>
@@ -532,7 +598,7 @@ export default function Account() {
                       value={shipping.line2}
                       onChange={(e) => setShipping({ ...shipping, line2: e.target.value })}
                       className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
-                      placeholder="Apartment, suite, unit, building, floor, etc."
+                      placeholder="Area, Street, Sector, Village, Landmark"
                     />
                   </div>
 
@@ -544,31 +610,39 @@ export default function Account() {
                         value={shipping.city}
                         onChange={(e) => setShipping({ ...shipping, city: e.target.value })}
                         className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                        placeholder="e.g. Mumbai, Bengaluru, Delhi"
                         required
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-neutral-700 mb-2">State / Province</label>
-                      <input
-                        type="text"
+                      <label className="block text-sm font-medium text-neutral-700 mb-2">State / Union Territory</label>
+                      <select
                         value={shipping.state}
                         onChange={(e) => setShipping({ ...shipping, state: e.target.value })}
-                        className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                        className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none bg-white"
                         required
-                      />
+                      >
+                        <option value="" disabled>Select State / UT</option>
+                        {INDIAN_STATES_AND_UTS.map((st) => (
+                          <option key={st} value={st}>{st}</option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     <div>
-                      <label className="block text-sm font-medium text-neutral-700 mb-2">ZIP / Postal Code</label>
+                      <label className="block text-sm font-medium text-neutral-700 mb-2">PIN Code</label>
                       <input
                         type="text"
                         value={shipping.postalCode}
-                        onChange={(e) => setShipping({ ...shipping, postalCode: e.target.value })}
-                        className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                        onChange={(e) => setShipping({ ...shipping, postalCode: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                        className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none font-mono"
+                        placeholder="110001"
+                        maxLength={6}
                         required
                       />
+                      <p className="mt-1 text-2xs text-neutral-400">6-digit Indian Postal PIN code</p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-neutral-700 mb-2">Country</label>
@@ -578,8 +652,7 @@ export default function Account() {
                         className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none bg-white"
                         required
                       >
-                        <option value="United States">United States</option>
-                        {/* Only US for now, extensible later */}
+                        <option value="India">India</option>
                       </select>
                     </div>
                   </div>
@@ -591,7 +664,7 @@ export default function Account() {
                       value={shipping.phoneNumber}
                       onChange={(e) => setShipping({ ...shipping, phoneNumber: e.target.value })}
                       className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
-                      placeholder="For delivery updates"
+                      placeholder="+91 98765 43210"
                     />
                   </div>
 

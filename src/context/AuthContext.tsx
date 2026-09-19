@@ -137,15 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Admin verification for designated admin emails
-      const normalizedEmail = (session.user.email || '').toLowerCase().trim();
-      const isAdmin =
-        role === 'admin' ||
-        normalizedEmail === 'ramaadhiasha@gmail.com' ||
-        normalizedEmail.endsWith('@sugahealth.com') ||
-        normalizedEmail.startsWith('admin@');
-      if (isAdmin) role = 'admin';
-
+      // Server-authoritative role strictly from verified backend metadata or profiles
       const uProfile: UserProfile = {
         uid: session.user.id,
         email: session.user.email || null,
@@ -305,18 +297,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const userRef = doc(db, 'users', currentUser.uid);
           const userSnap = await getDoc(userRef);
 
-          const normalizedEmail = (currentUser.email || '').toLowerCase().trim();
-          const isAdmin =
-            normalizedEmail === 'ramaadhiasha@gmail.com' ||
-            normalizedEmail.endsWith('@sugahealth.com') ||
-            normalizedEmail.startsWith('admin@');
-
           if (userSnap.exists()) {
             const p = userSnap.data() as UserProfile;
-            if (isAdmin && p.role !== 'admin') {
-              p.role = 'admin';
-              setDoc(userRef, { role: 'admin' }, { merge: true }).catch(() => {});
-            }
             setProfile(p);
 
             if (p.role !== 'patient') {
@@ -332,7 +314,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               email: currentUser.email,
               phoneNumber: currentUser.phoneNumber,
               displayName: currentUser.displayName,
-              role: isAdmin ? 'admin' : 'patient',
+              role: 'patient',
               createdAt: new Date().toISOString(),
             };
             await setDoc(userRef, newProfile).catch(() => {});

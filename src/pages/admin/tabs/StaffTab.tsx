@@ -21,7 +21,7 @@ export function StaffTab() {
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [role, setRole] = useState<'doctor' | 'pharmacist' | 'admin'>('doctor');
+  const [role, setRole] = useState<'doctor' | 'pharmacist'>('doctor');
   const [selectedSpecialties, setSelectedSpecialties] = useState<string[]>([]);
   
   const [submitting, setSubmitting] = useState(false);
@@ -239,7 +239,6 @@ export function StaffTab() {
                 >
                   <option value="doctor">Doctor</option>
                   <option value="pharmacist">Pharmacist</option>
-                  <option value="admin">Admin</option>
                 </select>
               </div>
             </div>

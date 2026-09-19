@@ -44,9 +44,9 @@ export default function Consultation() {
     email: '',
     phone: '',
     height: '',
-    heightUnit: 'inches' as 'inches' | 'cm',
+    heightUnit: 'cm' as 'inches' | 'cm',
     weight: '',
-    weightUnit: 'lbs' as 'lbs' | 'kg',
+    weightUnit: 'kg' as 'lbs' | 'kg',
     sex: '' as 'male' | 'female' | 'other' | '',
     conditions: [] as string[],
     medicalHistory: '',
@@ -441,21 +441,6 @@ export default function Consultation() {
           {/* Standard Intake Stepper */}
           {!approvedConsultation && (
             <div className="space-y-6">
-              {!submitted && !isAnalyzing && (
-                <div className="mb-6">
-                  <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-neutral-500 mb-2">
-                    <span>Step {step} of {totalSteps}</span>
-                    <span>{Math.round((step / totalSteps) * 100)}% Completed</span>
-                  </div>
-                  <div className="w-full bg-neutral-200 h-1 rounded-full overflow-hidden">
-                    <div
-                      className="bg-neutral-950 h-full transition-all duration-300"
-                      style={{ width: `${(step / totalSteps) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
               {!submitted && !isAnalyzing ? (
                 <div className="bg-white rounded-3xl border border-neutral-200 p-6 sm:p-10 shadow-xs">
                   {step === 1 && (
@@ -528,7 +513,7 @@ export default function Consultation() {
                           <label className="block text-xs font-semibold text-neutral-700 mb-1">Phone Number</label>
                           <input
                             type="tel"
-                            placeholder="+1 (555) 000-0000"
+                            placeholder="+91 98765 43210"
                             value={formData.phone}
                             onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                             className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
@@ -566,10 +551,10 @@ export default function Consultation() {
 
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Height (inches)</label>
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Height (cm)</label>
                           <input
                             type="number"
-                            placeholder="68"
+                            placeholder="172"
                             value={formData.height}
                             onChange={(e) => setFormData({ ...formData, height: e.target.value })}
                             className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
@@ -577,10 +562,10 @@ export default function Consultation() {
                           {errors.height && <p className="text-2xs text-rose-600 mt-1">{errors.height}</p>}
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Weight (lbs)</label>
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Weight (kg)</label>
                           <input
                             type="number"
-                            placeholder="165"
+                            placeholder="70"
                             value={formData.weight}
                             onChange={(e) => setFormData({ ...formData, weight: e.target.value })}
                             className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
