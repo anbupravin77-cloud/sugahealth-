@@ -8,6 +8,7 @@ import { generateConsultationDocument, generatePrescriptionDocument, getDocument
 import { calculateOrderTotals, StripePaymentProvider } from './src/server/commerce';
 import { authRouter } from './src/server/auth/routes';
 import clinicalRouter from './src/server/routes/clinicalRoutes';
+import { supabaseAdmin } from './src/server/supabaseAdmin';
 
 interface StorageSchema {
   published: SugaWebsiteContent;
@@ -1897,57 +1898,253 @@ const PORT = 3000;
   app.get('/api/user/profile', requireAuth, async (req, res) => {
     try {
       const decodedToken = (req as any).user;
-      const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-      if (!userDoc.exists) {
-        return res.status(404).json({ error: 'User profile not found' });
+      const uid = decodedToken.uid;
+
+      // 1. Fetch from canonical Supabase public.profiles table
+      const { data: profile, error: sbError } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .eq('id', uid)
+        .maybeSingle();
+
+      if (profile) {
+        return res.json({
+          id: profile.id,
+          uid: profile.id,
+          email: profile.email,
+          displayName: profile.display_name,
+          firstName: profile.first_name,
+          lastName: profile.last_name,
+          dateOfBirth: profile.date_of_birth,
+          sex: profile.sex,
+          phone: profile.phone_number,
+          phoneNumber: profile.phone_number,
+          shippingAddress: profile.shipping_address,
+          role: profile.role,
+          createdAt: profile.created_at,
+          updatedAt: profile.updated_at,
+        });
       }
-      res.json({ id: userDoc.id, ...userDoc.data() });
+
+      // 2. Fallback to Firestore if profile exists there
+      try {
+        const userDoc = await db.collection('users').doc(uid).get();
+        if (userDoc.exists) {
+          return res.json({ id: userDoc.id, uid: userDoc.id, ...userDoc.data() });
+        }
+      } catch (fbErr) {
+        // Firestore unavailable / mock
+      }
+
+      // 3. Fallback to token information if newly authenticated
+      res.json({
+        id: uid,
+        uid: uid,
+        email: decodedToken.email || null,
+        displayName: decodedToken.displayName || null,
+        role: decodedToken.role || 'patient',
+      });
     } catch (err: any) {
-      console.error('Error fetching user profile:', err);
-      res.status(500).json({ error: 'Internal Error' });
+      console.error('[API /api/user/profile GET] Safe diagnostic:', {
+        status: 500,
+        path: '/api/user/profile',
+        safeMessage: err.message,
+      });
+      res.status(500).json({ error: 'Internal Error', message: err.message });
     }
   });
 
   app.patch('/api/user/profile', requireAuth, async (req, res) => {
     try {
       const decodedToken = (req as any).user;
-      const { firstName, lastName, dateOfBirth, sex, shippingAddress, phone } = req.body;
-      
-      const updateData: Record<string, any> = {
-        updatedAt: new Date().toISOString()
+      const uid = decodedToken.uid;
+      const { firstName, lastName, dateOfBirth, sex, shippingAddress, phone, phoneNumber } = req.body;
+
+      // Build canonical Supabase profile updates
+      const supabaseUpdates: Record<string, any> = {
+        updated_at: new Date().toISOString(),
       };
 
-      if (firstName !== undefined) updateData.firstName = typeof firstName === 'string' ? firstName.trim() : firstName;
-      if (lastName !== undefined) updateData.lastName = typeof lastName === 'string' ? lastName.trim() : lastName;
-      if (dateOfBirth !== undefined) updateData.dateOfBirth = dateOfBirth;
-      if (sex !== undefined) updateData.sex = sex;
-      if (phone !== undefined) updateData.phone = phone;
-      if (shippingAddress !== undefined && typeof shippingAddress === 'object') {
-        updateData.shippingAddress = {
-          street: shippingAddress.street || '',
-          apartment: shippingAddress.apartment || '',
+      if (firstName !== undefined) {
+        supabaseUpdates.first_name = typeof firstName === 'string' ? firstName.trim() : null;
+      }
+      if (lastName !== undefined) {
+        supabaseUpdates.last_name = typeof lastName === 'string' ? lastName.trim() : null;
+      }
+      if (firstName !== undefined || lastName !== undefined) {
+        const currentFirst = firstName !== undefined && firstName !== null ? firstName : '';
+        const currentLast = lastName !== undefined && lastName !== null ? lastName : '';
+        const derivedDisplay = `${currentFirst} ${currentLast}`.trim();
+        if (derivedDisplay) {
+          supabaseUpdates.display_name = derivedDisplay;
+        }
+      }
+      if (dateOfBirth !== undefined) {
+        // Postgres DATE column rejects empty string ("") - must be YYYY-MM-DD or null
+        if (typeof dateOfBirth === 'string' && dateOfBirth.trim().length > 0) {
+          supabaseUpdates.date_of_birth = dateOfBirth.trim();
+        } else {
+          supabaseUpdates.date_of_birth = null;
+        }
+      }
+      if (sex !== undefined) {
+        const validSexes = ['male', 'female', 'other', 'prefer-not-to-say', ''];
+        supabaseUpdates.sex = validSexes.includes(sex) ? sex : null;
+      }
+      const rawPhone = phone !== undefined ? phone : phoneNumber;
+      if (rawPhone !== undefined) {
+        supabaseUpdates.phone_number = typeof rawPhone === 'string' ? rawPhone.trim() : null;
+      }
+      if (shippingAddress !== undefined && typeof shippingAddress === 'object' && shippingAddress !== null) {
+        supabaseUpdates.shipping_address = {
+          recipientName: shippingAddress.recipientName || '',
+          line1: shippingAddress.line1 || shippingAddress.street || '',
+          line2: shippingAddress.line2 || shippingAddress.apartment || '',
           city: shippingAddress.city || '',
           state: shippingAddress.state || '',
-          zip: shippingAddress.zip || ''
+          postalCode: shippingAddress.postalCode || shippingAddress.zip || '',
+          country: shippingAddress.country || 'United States',
+          phoneNumber: shippingAddress.phoneNumber || rawPhone || '',
         };
       }
 
-      const userRef = db.collection('users').doc(decodedToken.uid);
-      await userRef.set(updateData, { merge: true });
+      // Check if profile exists in Supabase public.profiles
+      const { data: existingProfile, error: checkError } = await supabaseAdmin
+        .from('profiles')
+        .select('id, role')
+        .eq('id', uid)
+        .maybeSingle();
 
-      // Audit log
-      await db.collection('audit_logs').add({
-        action: 'USER_PROFILE_UPDATED',
-        actorUid: decodedToken.uid,
-        fieldsUpdated: Object.keys(updateData).filter(k => k !== 'updatedAt'),
-        timestamp: new Date().toISOString()
+      if (checkError) {
+        console.error('[API /api/user/profile PATCH] Supabase lookup error:', {
+          status: 500,
+          errorCode: checkError.code,
+          safeMessage: checkError.message,
+          path: '/api/user/profile',
+        });
+        return res.status(500).json({
+          error: 'Failed to access database',
+          details: checkError.message,
+          code: checkError.code,
+        });
+      }
+
+      let updatedProfile: any = null;
+
+      if (existingProfile) {
+        // Update canonical profile row strictly for authenticated user id
+        const { data: updated, error: updateError } = await supabaseAdmin
+          .from('profiles')
+          .update(supabaseUpdates)
+          .eq('id', uid)
+          .select()
+          .single();
+
+        if (updateError) {
+          console.error('[API /api/user/profile PATCH] Supabase update error:', {
+            status: 500,
+            errorCode: updateError.code,
+            safeMessage: updateError.message,
+            path: '/api/user/profile',
+          });
+          return res.status(500).json({
+            error: 'Failed to save profile in database',
+            details: updateError.message,
+            code: updateError.code,
+          });
+        }
+        updatedProfile = updated;
+      } else {
+        // Bootstrap / Insert new canonical profile
+        const newProfile = {
+          id: uid,
+          email: decodedToken.email || null,
+          role: decodedToken.role || 'patient',
+          created_at: new Date().toISOString(),
+          ...supabaseUpdates,
+        };
+
+        const { data: inserted, error: insertError } = await supabaseAdmin
+          .from('profiles')
+          .insert(newProfile)
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error('[API /api/user/profile PATCH] Supabase insert error:', {
+            status: 500,
+            errorCode: insertError.code,
+            safeMessage: insertError.message,
+            path: '/api/user/profile',
+          });
+          return res.status(500).json({
+            error: 'Failed to create profile in database',
+            details: insertError.message,
+            code: insertError.code,
+          });
+        }
+        updatedProfile = inserted;
+      }
+
+      // Also mirror to Firestore if db is active (graceful fallback)
+      try {
+        const firestoreUpdates: Record<string, any> = {
+          updatedAt: new Date().toISOString(),
+        };
+        if (firstName !== undefined) firestoreUpdates.firstName = typeof firstName === 'string' ? firstName.trim() : firstName;
+        if (lastName !== undefined) firestoreUpdates.lastName = typeof lastName === 'string' ? lastName.trim() : lastName;
+        if (dateOfBirth !== undefined) firestoreUpdates.dateOfBirth = dateOfBirth;
+        if (sex !== undefined) firestoreUpdates.sex = sex;
+        if (phone !== undefined || phoneNumber !== undefined) firestoreUpdates.phone = rawPhone;
+        if (shippingAddress !== undefined && typeof shippingAddress === 'object') {
+          firestoreUpdates.shippingAddress = supabaseUpdates.shipping_address;
+        }
+
+        await db.collection('users').doc(uid).set(firestoreUpdates, { merge: true });
+      } catch (fbErr) {
+        // Firestore is optional / secondary
+      }
+
+      // Record audit log entry in Supabase repository
+      try {
+        await supabaseAdmin.from('audit_logs').insert({
+          action: 'USER_PROFILE_UPDATED',
+          actor_uid: uid,
+          metadata: {
+            fieldsUpdated: Object.keys(supabaseUpdates).filter(k => k !== 'updated_at'),
+          },
+          created_at: new Date().toISOString(),
+        });
+      } catch (auditErr) {
+        console.warn('[AuditLog] Warning recording profile audit log:', auditErr);
+      }
+
+      res.json({
+        success: true,
+        profile: {
+          id: updatedProfile.id,
+          uid: updatedProfile.id,
+          email: updatedProfile.email,
+          displayName: updatedProfile.display_name,
+          firstName: updatedProfile.first_name,
+          lastName: updatedProfile.last_name,
+          dateOfBirth: updatedProfile.date_of_birth,
+          sex: updatedProfile.sex,
+          phone: updatedProfile.phone_number,
+          phoneNumber: updatedProfile.phone_number,
+          shippingAddress: updatedProfile.shipping_address,
+          role: updatedProfile.role,
+          createdAt: updatedProfile.created_at,
+          updatedAt: updatedProfile.updated_at,
+        },
       });
-
-      const updatedDoc = await userRef.get();
-      res.json({ success: true, profile: { id: updatedDoc.id, ...updatedDoc.data() } });
     } catch (err: any) {
-      console.error('Error updating user profile:', err);
-      res.status(500).json({ error: 'Failed to update profile' });
+      console.error('[API /api/user/profile PATCH] Unhandled error:', {
+        status: 500,
+        safeMessage: err.message,
+        path: '/api/user/profile',
+      });
+      res.status(500).json({ error: 'Failed to update profile', message: err.message });
     }
   });
 

@@ -46,6 +46,23 @@ export class ProfileRepository {
     return data as DbProfile;
   }
 
+  async updateProfile(id: string, updates: Partial<DbProfile>): Promise<DbProfile> {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to update profile: ${error.message}`);
+    }
+    return data as DbProfile;
+  }
+
   async getStaffProfileById(id: string): Promise<DbStaffProfile | null> {
     const { data, error } = await supabaseAdmin
       .from('staff_profiles')

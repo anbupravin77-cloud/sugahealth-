@@ -28,7 +28,7 @@ export default function Login() {
       } else if (profile.role === 'admin') {
         navigate('/admin', { replace: true });
       } else {
-        navigate('/account', { replace: true });
+        navigate('/', { replace: true });
       }
     }
   }, [user, profile, authLoading, navigate]);
@@ -37,13 +37,13 @@ export default function Login() {
     try {
       setLoading(true);
       setError('');
-      // Use Supabase Google OAuth with current origin redirect
-      await signInWithGoogle(`${window.location.origin}/account`);
+      // Use Supabase Google OAuth with patient home redirect
+      await signInWithGoogle(`${window.location.origin}/`);
     } catch (err: any) {
       console.warn('Supabase Google OAuth fallback to Firebase popup:', err);
       try {
         await signInWithPopup(auth, googleProvider);
-        navigate('/account');
+        navigate('/');
       } catch (fbErr: any) {
         setError(fbErr.message || 'Failed to sign in with Google');
       }
@@ -60,7 +60,7 @@ export default function Login() {
       setLoading(true);
       setError('');
       await signInWithEmail({ email, password });
-      navigate('/account');
+      navigate('/');
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Invalid email or password');

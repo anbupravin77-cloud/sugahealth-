@@ -4,7 +4,7 @@ import { useAuth, Address } from '../context/AuthContext';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { supabase } from '../lib/supabase';
-import { Loader2, CheckCircle2, User, MapPin, FileText, ArrowRight, ShoppingBag, Bell, Repeat, Pill } from 'lucide-react';
+import { Loader2, CheckCircle2, User, MapPin, FileText, ArrowRight, ArrowLeft, ShoppingBag, Bell, Repeat, Pill } from 'lucide-react';
 import { PatientDocumentList } from './PatientDocumentList';
 import { OrdersList } from './patient/OrdersList';
 import SubscriptionsList from './patient/SubscriptionsList';
@@ -151,14 +151,20 @@ export default function Account() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to save personal information.');
+        console.error('[AccountProfileSave] Safe diagnostic:', {
+          status: res.status,
+          errorCode: data.code || 'PROFILE_UPDATE_FAILED',
+          safeMessage: data.details || data.error || 'Failed to save personal information',
+          path: '/api/user/profile',
+        });
+        throw new Error(data.details || data.error || 'Failed to save personal information.');
       }
       
       await refreshProfile();
-      setSuccess('Personal information saved successfully.');
-      setTimeout(() => setSuccess(''), 3000);
+      setSuccess('Personal information saved.');
+      setTimeout(() => setSuccess(''), 4000);
     } catch (err: any) {
-      console.error(err);
+      console.error('[AccountProfileSave] Error:', err.message);
       setError(err.message || 'Failed to save personal information.');
     } finally {
       setSaving(false);
@@ -188,14 +194,20 @@ export default function Account() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to save shipping address.');
+        console.error('[AccountProfileSave] Safe diagnostic:', {
+          status: res.status,
+          errorCode: data.code || 'SHIPPING_UPDATE_FAILED',
+          safeMessage: data.details || data.error || 'Failed to save shipping address',
+          path: '/api/user/profile',
+        });
+        throw new Error(data.details || data.error || 'Failed to save shipping address.');
       }
       
       await refreshProfile();
-      setSuccess('Shipping address saved successfully.');
-      setTimeout(() => setSuccess(''), 3000);
+      setSuccess('Personal information saved.');
+      setTimeout(() => setSuccess(''), 4000);
     } catch (err: any) {
-      console.error(err);
+      console.error('[AccountProfileSave] Error:', err.message);
       setError(err.message || 'Failed to save shipping address.');
     } finally {
       setSaving(false);
@@ -205,11 +217,20 @@ export default function Account() {
   return (
     <div className="bg-background pt-[90px] min-h-screen">
       <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-900">My Account</h1>
-          <p className="mt-2 text-sm text-neutral-500">
-            Manage your personal information and shipping details.
-          </p>
+        <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-neutral-900">My Account</h1>
+            <p className="mt-2 text-sm text-neutral-500">
+              Manage your personal information and shipping details.
+            </p>
+          </div>
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-neutral-300 bg-white text-sm font-medium text-neutral-800 hover:bg-neutral-50 hover:border-neutral-400 transition-colors shadow-2xs self-start sm:self-auto"
+          >
+            <ArrowLeft size={16} />
+            Back to Dashboard
+          </Link>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">

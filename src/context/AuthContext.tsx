@@ -157,7 +157,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         firstName: serverProfile?.first_name || session.user.user_metadata?.first_name || '',
         lastName: serverProfile?.last_name || session.user.user_metadata?.last_name || '',
         dateOfBirth: serverProfile?.date_of_birth || '',
-        sex: (serverProfile?.gender || '') as any,
+        sex: (serverProfile?.sex || serverProfile?.gender || '') as any,
+        shippingAddress: serverProfile?.shipping_address || undefined,
         role: role,
         createdAt: serverProfile?.created_at || session.user.created_at || new Date().toISOString(),
       };
