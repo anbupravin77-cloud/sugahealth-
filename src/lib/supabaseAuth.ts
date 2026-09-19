@@ -119,12 +119,14 @@ export async function resetPasswordForEmail(email: string, redirectTo?: string) 
 /**
  * Prepare Google OAuth sign-in flow.
  * Note: Requires Google OAuth client configured in Supabase dashboard.
+ * Defaults redirect to current window origin.
  */
 export async function signInWithGoogle(redirectTo?: string) {
+  const targetUrl = redirectTo || `${window.location.origin}/`;
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: redirectTo || `${window.location.origin}/auth-test`,
+      redirectTo: targetUrl,
       queryParams: {
         access_type: 'offline',
         prompt: 'consent',
@@ -134,6 +136,38 @@ export async function signInWithGoogle(redirectTo?: string) {
 
   if (error) {
     throw error;
+  }
+
+  return data;
+}
+
+/**
+ * Server-authenticated doctor login helper.
+ * Validates doctor credentials and server-side role assignment.
+ */
+export async function signInWithDoctorCredentials(credentials: SupabaseAuthCredentials) {
+  const response = await fetch('/api/auth/doctor-login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email: credentials.email.trim().toLowerCase(),
+      password: credentials.password,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || 'Invalid clinical credentials');
+  }
+
+  // If a session was returned from server, set it in the client Supabase instance
+  if (data.session) {
+    await supabase.auth.setSession({
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
+    });
   }
 
   return data;

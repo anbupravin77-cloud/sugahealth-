@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { useAuth, Address } from '../context/AuthContext';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Loader2, CheckCircle2, User, MapPin, FileText, ArrowRight, ShoppingBag, Bell, Repeat } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { Loader2, CheckCircle2, User, MapPin, FileText, ArrowRight, ShoppingBag, Bell, Repeat, Pill } from 'lucide-react';
 import { PatientDocumentList } from './PatientDocumentList';
 import { OrdersList } from './patient/OrdersList';
 import SubscriptionsList from './patient/SubscriptionsList';
@@ -64,22 +65,63 @@ export default function Account() {
 
   // Fetch consultations when tab is active
   useEffect(() => {
-    if (activeTab === 'consultations' && user) {
+    if (activeTab === 'consultations') {
       setLoadingConsultations(true);
-      const q = query(
-        collection(db, 'consultations'),
-        where('patientId', '==', user.uid)
-      );
-      getDocs(q).then(snapshot => {
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        // Sort in memory since we don't have a composite index for patientId + updatedAt
-        data.sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-        setConsultations(data);
+
+      const fetchBoth = async () => {
+        const results: any[] = [];
+
+        // 1. Fetch Supabase clinical consultations
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            const res = await fetch('/api/clinical/consultations/patient', {
+              headers: { 'Authorization': `Bearer ${session.access_token}` },
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (data.consultations) {
+                data.consultations.forEach((sc: any) => {
+                  results.push({
+                    id: sc.id,
+                    primaryConcern: sc.primary_concern,
+                    status: sc.status,
+                    updatedAt: sc.updated_at || sc.created_at,
+                    isSupabase: true,
+                    selectedOption: sc.selected_medication_option,
+                  });
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Clinical consultations fetch error:', err);
+        }
+
+        // 2. Fetch Firestore consultations (if user exists in firebase)
+        if (user) {
+          try {
+            const q = query(
+              collection(db, 'consultations'),
+              where('patientId', '==', user.uid)
+            );
+            const snapshot = await getDocs(q);
+            snapshot.docs.forEach((doc) => {
+              if (!results.some((r) => r.id === doc.id)) {
+                results.push({ id: doc.id, ...doc.data() });
+              }
+            });
+          } catch (err) {
+            console.warn('Firestore consultations fetch error:', err);
+          }
+        }
+
+        results.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+        setConsultations(results);
         setLoadingConsultations(false);
-      }).catch(err => {
-        console.error(err);
-        setLoadingConsultations(false);
-      });
+      };
+
+      fetchBoth();
     }
   }, [activeTab, user]);
 
@@ -317,8 +359,17 @@ export default function Account() {
                               >
                                 Resume <ArrowRight size={14} />
                               </Link>
+                            ) : c.status === 'completed' ? (
+                              <Link 
+                                to="/consultation"
+                                className="flex items-center gap-1 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-full hover:bg-emerald-100 transition-colors"
+                              >
+                                <Pill size={13} className="text-emerald-700" />
+                                <span>View Prescriptions</span>
+                                <ArrowRight size={13} />
+                              </Link>
                             ) : (
-                              <span className="text-xs text-neutral-400 font-medium">Locked</span>
+                              <span className="text-xs text-neutral-400 font-medium">Under Review</span>
                             )}
                           </div>
                           

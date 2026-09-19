@@ -1,15 +1,24 @@
-import { useState, useEffect, useRef } from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { cn } from '../lib/utils';
-import { ChevronLeft, ArrowRight, CheckCircle2, Lock, ArrowLeft, Loader2, Check, AlertCircle, Save } from 'lucide-react';
+import { ChevronLeft, ArrowRight, CheckCircle2, Lock, ArrowLeft, Loader2, Check, AlertCircle, Save, ShieldCheck, Pill, CreditCard, Info } from 'lucide-react';
 import { Skeleton } from '../components/ui/Skeleton';
 import { useAuth } from '../context/AuthContext';
-import { collection, doc, getDocs, query, where, limit, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
+
+interface MedicationOption {
+  id: string;
+  name: string;
+  strength: string;
+  dosageForm: string;
+  priceInr: number;
+  description: string;
+  isRecommended?: boolean;
+}
 
 export default function Consultation() {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const [draftId, setDraftId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState('');
@@ -20,6 +29,13 @@ export default function Consultation() {
   const [analyzingStage, setAnalyzingStage] = useState(0);
   const totalSteps = 6;
   const shouldReduceMotion = useReducedMotion();
+
+  // Doctor review / approval state
+  const [approvedConsultation, setApprovedConsultation] = useState<any | null>(null);
+  const [selectedMedOption, setSelectedMedOption] = useState<MedicationOption | null>(null);
+  const [isSelectingOption, setIsSelectingOption] = useState(false);
+  const [pharmacyStatus, setPharmacyStatus] = useState<string | null>(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -43,72 +59,83 @@ export default function Consultation() {
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Auto-load draft on mount
+  // Fetch token helper
+  const getAccessToken = async (): Promise<string | null> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) return session.access_token;
+    if (user && typeof (user as any).getIdToken === 'function') {
+      return (user as any).getIdToken();
+    }
+    return null;
+  };
+
+  // Auto-load draft or active consultation on mount
   useEffect(() => {
-    async function loadDraft() {
-      if (!user) return;
-      const q = query(
-        collection(db, 'consultations'),
-        where('patientId', '==', user.uid),
-        where('status', '==', 'draft'),
-        limit(1)
-      );
+    async function loadConsultationData() {
+      const token = await getAccessToken();
+      if (!token) return;
+
       try {
-        const querySnapshot = await getDocs(q);
-        if (!querySnapshot.empty) {
-          const docSnap = querySnapshot.docs[0];
-          setDraftId(docSnap.id);
-          const data = docSnap.data();
-          if (data.responses) {
-            setFormData({
-              ...formData,
-              ...data.responses,
-              primaryConcern: data.primaryConcern || 'weight'
-            });
+        const res = await fetch('/api/clinical/consultations/draft', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.draft) {
+            setDraftId(data.draft.id);
+            if (data.draft.responses) {
+              setFormData((prev) => ({
+                ...prev,
+                ...data.draft.responses,
+                primaryConcern: data.draft.primary_concern || prev.primaryConcern,
+              }));
+            }
           }
         }
       } catch (err) {
-        console.error("Error loading draft", err);
+        console.warn('Draft load warning:', err);
       }
     }
-    loadDraft();
+
+    loadConsultationData();
   }, [user]);
 
   const saveDraft = async (dataToSave = formData) => {
-    if (!user) return;
+    const token = await getAccessToken();
+    if (!token) return;
+
     setIsSaving(true);
     try {
-      const payload = {
-        patientId: user.uid,
-        status: 'draft',
-        primaryConcern: dataToSave.primaryConcern,
-        responses: dataToSave,
-        schemaVersion: 1,
-        updatedAt: new Date().toISOString(),
-      };
-      
-      if (draftId) {
-        const docRef = doc(db, 'consultations', draftId);
-        await updateDoc(docRef, payload);
-      } else {
-        const newDocRef = doc(collection(db, 'consultations'));
-        await setDoc(newDocRef, {
-          ...payload,
-          createdAt: new Date().toISOString(),
-        });
-        setDraftId(newDocRef.id);
+      const res = await fetch('/api/clinical/consultations/draft', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          draftId: draftId || undefined,
+          primaryConcern: dataToSave.primaryConcern,
+          responses: dataToSave,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.draftId) {
+          setDraftId(data.draftId);
+        }
+        setSaveSuccess('Draft saved');
+        setTimeout(() => setSaveSuccess(''), 2000);
       }
-      setSaveSuccess('Draft saved');
-      setTimeout(() => setSaveSuccess(''), 2000);
     } catch (err) {
-      console.error("Failed to save draft", err);
+      console.warn('Failed to save draft:', err);
     } finally {
       setIsSaving(false);
     }
   };
 
   const nextStep = () => {
-    // Validate current step before proceeding
     if (step === 1) {
       if (!formData.primaryConcern) {
         setErrors({ primaryConcern: 'Please select a primary concern to continue.' });
@@ -118,50 +145,32 @@ export default function Consultation() {
       setStep(2);
       saveDraft();
     } else if (step === 2) {
-      const stepErrors: Record<string, string> = {};
-      if (!formData.fullName.trim()) {
-        stepErrors.fullName = 'Full legal name is required.';
-      }
-      if (!formData.email.trim()) {
-        stepErrors.email = 'Email address is required.';
-      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-        stepErrors.email = 'Please enter a valid email address.';
-      }
-      if (!formData.phone.trim()) {
-        stepErrors.phone = 'Phone number is required for prescription alerts.';
-      } else if (formData.phone.replace(/\D/g, '').length < 10) {
-        stepErrors.phone = 'Please enter a valid 10-digit phone number.';
-      }
-
-      if (Object.keys(stepErrors).length > 0) {
-        setErrors(stepErrors);
+      const newErrors: Record<string, string> = {};
+      if (!formData.fullName.trim()) newErrors.fullName = 'Full legal name is required';
+      if (!formData.email.trim() || !formData.email.includes('@')) newErrors.email = 'Valid email address is required';
+      if (!formData.phone.trim()) newErrors.phone = 'Phone number is required for clinician communications';
+      if (Object.keys(newErrors).length > 0) {
+        setErrors(newErrors);
         return;
       }
       setErrors({});
       setStep(3);
       saveDraft();
     } else if (step === 3) {
-      const stepErrors: Record<string, string> = {};
-      if (!formData.height.trim()) {
-        stepErrors.height = 'Height is required for BMI and dosing calculation.';
-      }
-      if (!formData.weight.trim()) {
-        stepErrors.weight = 'Weight is required for clinical dosing.';
-      }
-      if (!formData.sex) {
-        stepErrors.sex = 'Please select biological sex (required for clinical protocol accuracy).';
-      }
-
-      if (Object.keys(stepErrors).length > 0) {
-        setErrors(stepErrors);
+      const newErrors: Record<string, string> = {};
+      if (!formData.height) newErrors.height = 'Height is required for accurate medical dosing';
+      if (!formData.weight) newErrors.weight = 'Weight is required for accurate medical dosing';
+      if (!formData.sex) newErrors.sex = 'Biological sex is required';
+      if (Object.keys(newErrors).length > 0) {
+        setErrors(newErrors);
         return;
       }
       setErrors({});
       setStep(4);
       saveDraft();
     } else if (step === 4) {
-      if (formData.conditions.length === 0 && !formData.medicalHistory.trim()) {
-        setErrors({ conditions: 'Please select applicable conditions or choose "None of the above".' });
+      if (formData.conditions.length === 0) {
+        setErrors({ conditions: 'Please select applicable conditions or "None of the above"' });
         return;
       }
       setErrors({});
@@ -171,106 +180,137 @@ export default function Consultation() {
       setErrors({});
       setStep(6);
       saveDraft();
-    } else {
-      setStep(Math.min(totalSteps, step + 1));
-      saveDraft();
     }
   };
 
   const prevStep = () => {
-    setErrors({});
-    setStep(Math.max(1, step - 1));
-    saveDraft();
+    if (step > 1) {
+      setStep(step - 1);
+    }
   };
 
   const handleSubmit = async () => {
     if (!formData.consentTruth || !formData.consentTelehealth || !formData.consentPrivacy) {
-      setErrors({ consent: 'You must review and accept all clinical consent terms to proceed.' });
+      setErrors({ consent: 'All clinical consent and truthfulness statements must be acknowledged.' });
       return;
     }
 
-    if (!user) return;
-    
     setErrors({});
     setIsAnalyzing(true);
-    
+    setAnalyzingStage(0);
+
     try {
-      // First save the final consent state to the draft
-      await saveDraft(formData);
-      
-      if (!draftId) {
-        throw new Error("No draft found to submit");
+      const token = await getAccessToken();
+      if (!token) {
+        throw new Error('Please sign in to submit your consultation.');
       }
 
-      // Then call the trusted backend assignment endpoint
-      const token = await user.getIdToken();
-      const res = await fetch(`/api/consultations/${draftId}/submit`, {
+      // 1. Ensure draft is saved in Supabase
+      const saveRes = await fetch('/api/clinical/consultations/draft', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          draftId: draftId || undefined,
+          primaryConcern: formData.primaryConcern,
+          responses: formData,
+        }),
       });
-      
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || "Submission failed");
+
+      const saveData = await saveRes.json();
+      const finalDraftId = saveData.draftId || draftId;
+
+      if (!finalDraftId) {
+        throw new Error('Unable to prepare consultation record.');
       }
-      
-      setTimeout(() => setAnalyzingStage(1), 600);
-      setTimeout(() => setAnalyzingStage(2), 1200);
+
+      // 2. Submit consultation to clinical workflow (assigns doctor & notifies)
+      const submitRes = await fetch(`/api/clinical/consultations/${finalDraftId}/submit`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!submitRes.ok) {
+        const errorData = await submitRes.json();
+        throw new Error(errorData.error || 'Submission failed');
+      }
+
+      setTimeout(() => setAnalyzingStage(1), 500);
+      setTimeout(() => setAnalyzingStage(2), 1000);
       setTimeout(() => {
         setIsAnalyzing(false);
         setSubmitted(true);
-      }, 1900);
-    } catch (err) {
-      console.error("Submission failed", err);
-      setErrors({ consent: 'Failed to submit consultation. Please try again.' });
+      }, 1600);
+    } catch (err: any) {
+      console.error('Submission failed:', err);
+      setErrors({ consent: err.message || 'Failed to submit consultation. Please try again.' });
       setIsAnalyzing(false);
     }
   };
 
+  const handleSelectOption = async (option: MedicationOption) => {
+    if (!draftId) return;
+    setIsSelectingOption(true);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`/api/clinical/consultations/${draftId}/select-option`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ selectedOption: option }),
+      });
+
+      if (res.ok) {
+        setSelectedMedOption(option);
+        setPharmacyStatus('ready_for_pharmacy');
+      }
+    } catch (err) {
+      console.error('Error selecting option:', err);
+    } finally {
+      setIsSelectingOption(false);
+    }
+  };
+
   const toggleCondition = (cond: string) => {
-    setErrors(prev => {
+    setErrors((prev) => {
       const updated = { ...prev };
       delete updated.conditions;
       return updated;
     });
 
     if (cond === 'None of the above') {
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
         conditions: prev.conditions.includes('None of the above') ? [] : ['None of the above'],
       }));
       return;
     }
 
-    setFormData(prev => {
-      const filtered = prev.conditions.filter(c => c !== 'None of the above');
+    setFormData((prev) => {
+      const filtered = prev.conditions.filter((c) => c !== 'None of the above');
       if (filtered.includes(cond)) {
-        return { ...prev, conditions: filtered.filter(c => c !== cond) };
+        return { ...prev, conditions: filtered.filter((c) => c !== cond) };
       } else {
         return { ...prev, conditions: [...filtered, cond] };
       }
     });
   };
 
-  const pageVariants = {
-    initial: { opacity: 0, x: shouldReduceMotion ? 0 : 20 },
-    animate: { opacity: 1, x: 0 },
-    exit: { opacity: 0, x: shouldReduceMotion ? 0 : -20 }
-  };
-
-  const pageTransition = { duration: 0.35, ease: [0.16, 1, 0.3, 1] as const };
-
   const primaryOptions = [
     { id: 'weight', title: 'Medical Weight Loss', desc: 'GLP-1 therapy (Semaglutide / Tirzepatide)' },
     { id: 'hair', title: 'Hair Growth & Density', desc: 'DHT blockers and microvascular stimulators' },
-    { id: 'sex', title: 'Sexual Health & Vitality', desc: 'Discreet, clinician-prescribed ED and stamina options' }
+    { id: 'sex', title: 'Sexual Health & Vitality', desc: 'Discreet, clinician-prescribed ED and stamina options' },
   ];
 
   return (
     <div className="min-h-screen flex flex-col bg-background selection:bg-neutral-900 selection:text-white">
-      {/* Top Bar with Brand & Tagline - Clean and Private */}
+      {/* Top Header */}
       <header className="border-b border-neutral-200/80 bg-white py-3.5 sm:py-4 px-4 sm:px-6 lg:px-8 flex justify-between items-center sticky top-0 z-10">
         <Link to="/" className="flex flex-col items-start select-none">
           <span className="font-sans text-xl tracking-tighter uppercase font-black text-neutral-950 leading-none">
@@ -281,13 +321,11 @@ export default function Consultation() {
           </span>
         </Link>
         <div className="flex items-center gap-4">
-          {!submitted && (
+          {!submitted && !approvedConsultation && (
             <button
-              onClick={() => {
-                saveDraft();
-              }}
+              onClick={() => saveDraft()}
               disabled={isSaving}
-              className="text-xs font-bold uppercase tracking-wider text-neutral-600 hover:text-neutral-950 transition-colors flex items-center gap-1.5"
+              className="text-xs font-bold uppercase tracking-wider text-neutral-600 hover:text-neutral-950 transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
               {saveSuccess || 'Save Draft'}
@@ -300,787 +338,561 @@ export default function Consultation() {
         </div>
       </header>
 
-      <main className="flex-grow flex flex-col">
-        {/* Progress bar */}
-        {!submitted && (
-          <div className="w-full bg-neutral-200 h-1">
-            <div 
-              className="bg-neutral-950 h-full transition-all duration-500 ease-out" 
-              style={{ width: `${(step / totalSteps) * 100}%` }}
-            />
-          </div>
-        )}
-
-        <div className="flex-grow flex items-center justify-center py-8 sm:py-12 md:py-16 px-4 sm:px-6">
-          <div className="w-full max-w-2xl">
-            
-            {!submitted ? (
-              <>
-                <div className="mb-6 sm:mb-8 h-8 flex items-center justify-between">
-                  {step > 1 ? (
-                    <button 
-                      onClick={prevStep}
-                      className="flex items-center text-xs font-bold tracking-wider uppercase text-neutral-500 hover:text-neutral-950 transition-colors group cursor-pointer"
-                    >
-                      <ChevronLeft size={16} className="mr-1 group-hover:-translate-x-1 transition-transform" />
-                      Back
-                    </button>
-                  ) : (
-                    <Link
-                      to="/"
-                      className="inline-flex items-center text-xs font-bold tracking-wider uppercase text-neutral-600 hover:text-neutral-950 transition-colors group"
-                    >
-                      <ArrowLeft size={15} className="mr-1.5 group-hover:-translate-x-1 transition-transform" />
-                      Return to Home
-                    </Link>
-                  )}
-                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-400">
-                    Step {step} of {totalSteps}
+      {/* Main Content Area */}
+      <main className="flex-grow flex items-center justify-center py-8 sm:py-12 px-4 sm:px-6 lg:px-8">
+        <div className="w-full max-w-2xl">
+          {/* Approved Consultation & Prescription Options View */}
+          {approvedConsultation && (
+            <div className="bg-white rounded-3xl border border-neutral-200 p-6 sm:p-10 shadow-xs space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b border-neutral-100">
+                <div className="space-y-1">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-2xs font-semibold">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
+                    Doctor Approved & Verified
                   </span>
+                  <h2 className="text-2xl font-bold text-neutral-950">Clinical Treatment Plan</h2>
                 </div>
+                {pharmacyStatus === 'ready_for_pharmacy' && (
+                  <span className="px-3 py-1 bg-stone-900 text-white rounded-full text-xs font-semibold">
+                    Ready for Pharmacy
+                  </span>
+                )}
+              </div>
 
-                <AnimatePresence mode="wait">
-                  {/* Step 1: Primary Concern with Home button & selectable cards */}
-                  {step === 1 && (
-                    <motion.div
-                      key="step1"
-                      variants={pageVariants}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      transition={pageTransition}
-                      className="bg-white p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl border border-neutral-200/90 hover:border-neutral-950 transition-colors"
-                    >
-                      <span className="text-xs font-bold tracking-widest text-neutral-500 uppercase block mb-2">
-                        Primary Concern
-                      </span>
-                      <h1 className="font-sans text-3xl sm:text-4xl font-extrabold text-neutral-950 mb-3 tracking-tight">
-                        What brings you in today?
-                      </h1>
-                      <p className="text-neutral-600 text-sm sm:text-base mb-6 sm:mb-8">
-                        Select one clinical focus. Your physician will review your complete health chart.
-                      </p>
-                      
-                      <div className="space-y-3.5 mb-6">
-                        {primaryOptions.map((opt) => {
-                          const isSelected = formData.primaryConcern === opt.id;
-                          return (
-                            <button 
-                              key={opt.id}
-                              type="button"
-                              onClick={() => {
-                                setFormData(prev => ({ ...prev, primaryConcern: opt.id as any }));
-                                setErrors({});
-                              }}
-                              className={cn(
-                                "w-full flex items-center justify-between text-left p-5 sm:p-6 rounded-2xl border transition-all cursor-pointer",
-                                isSelected
-                                  ? "border-neutral-950 bg-neutral-100/90 shadow-xs"
-                                  : "border-neutral-200/90 bg-neutral-50/50 hover:bg-neutral-100 hover:border-neutral-400"
-                              )}
-                            >
-                              <div>
-                                <span className={cn(
-                                  "font-sans text-lg font-bold block mb-1",
-                                  isSelected ? "text-neutral-950" : "text-neutral-900"
-                                )}>
-                                  {opt.title}
-                                </span>
-                                <span className="text-xs sm:text-sm text-neutral-500">{opt.desc}</span>
-                              </div>
-                              <div className={cn(
-                                "w-6 h-6 rounded-full flex items-center justify-center border shrink-0 ml-4 transition-colors",
-                                isSelected
-                                  ? "bg-neutral-950 border-neutral-950 text-white"
-                                  : "border-neutral-300 bg-white text-transparent"
-                              )}>
-                                <Check size={14} strokeWidth={3} />
-                              </div>
-                            </button>
-                          );
-                        })}
+              {/* Clinician Message */}
+              {approvedConsultation.customClinicianMessage && (
+                <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 text-xs text-stone-700 leading-relaxed space-y-1">
+                  <span className="font-semibold text-stone-950 block">Physician Clinical Note:</span>
+                  <p>{approvedConsultation.customClinicianMessage}</p>
+                </div>
+              )}
+
+              {/* Medication Options Selection */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-neutral-900 uppercase tracking-wider">
+                  Available Medication Formulations
+                </h3>
+                <p className="text-xs text-neutral-500">
+                  Select one preferred formulation from your approved treatment plan to prepare for pharmacy dispatch:
+                </p>
+
+                <div className="grid grid-cols-1 gap-3 pt-2">
+                  {(approvedConsultation.medicationOptions?.options || []).map((opt: MedicationOption) => {
+                    const isSelected = selectedMedOption?.id === opt.id || approvedConsultation.selectedOption?.id === opt.id;
+                    return (
+                      <div
+                        key={opt.id}
+                        onClick={() => handleSelectOption(opt)}
+                        className={cn(
+                          'p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between',
+                          isSelected
+                            ? 'border-stone-900 bg-stone-50/90 ring-1 ring-stone-900'
+                            : 'border-neutral-200 bg-white hover:border-neutral-400'
+                        )}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-neutral-950">{opt.name}</span>
+                            <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-neutral-100 text-neutral-700 border border-neutral-200">
+                              {opt.strength}
+                            </span>
+                            {opt.isRecommended && (
+                              <span className="text-3xs font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                                Doctor Preferred
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-neutral-500">{opt.description}</p>
+                        </div>
+                        <div className="text-right pl-4 shrink-0">
+                          <span className="text-base font-bold text-neutral-950 block font-mono">
+                            ₹{opt.priceInr.toLocaleString('en-IN')}
+                          </span>
+                          <span className="text-3xs text-neutral-400">30-day supply</span>
+                        </div>
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-                      {errors.primaryConcern && (
-                        <p className="text-xs font-semibold text-red-600 mb-4 flex items-center gap-1.5">
-                          <AlertCircle size={14} /> {errors.primaryConcern}
-                        </p>
-                      )}
+              {/* Proceed to Payment Action Button */}
+              <div className="pt-4 border-t border-neutral-100 flex flex-col sm:flex-row gap-3 items-center justify-between">
+                <Link
+                  to="/account"
+                  className="text-xs font-semibold text-neutral-600 hover:text-neutral-950 transition-colors"
+                >
+                  &larr; Back to Account Dashboard
+                </Link>
 
+                <button
+                  type="button"
+                  onClick={() => setShowPaymentModal(true)}
+                  disabled={!selectedMedOption && !approvedConsultation.selectedOption}
+                  className="w-full sm:w-auto px-6 py-3 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold uppercase tracking-wider rounded-full transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  <span>Proceed to Payment</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Standard Intake Stepper */}
+          {!approvedConsultation && (
+            <div className="space-y-6">
+              {!submitted && !isAnalyzing && (
+                <div className="mb-6">
+                  <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-neutral-500 mb-2">
+                    <span>Step {step} of {totalSteps}</span>
+                    <span>{Math.round((step / totalSteps) * 100)}% Completed</span>
+                  </div>
+                  <div className="w-full bg-neutral-200 h-1 rounded-full overflow-hidden">
+                    <div
+                      className="bg-neutral-950 h-full transition-all duration-300"
+                      style={{ width: `${(step / totalSteps) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {!submitted && !isAnalyzing ? (
+                <div className="bg-white rounded-3xl border border-neutral-200 p-6 sm:p-10 shadow-xs">
+                  {step === 1 && (
+                    <div className="space-y-6">
+                      <div>
+                        <h2 className="text-2xl font-bold text-neutral-950">Select your primary clinical focus</h2>
+                        <p className="text-xs text-neutral-500 mt-1">Our licensed physician board specializes in precision telehealth treatments.</p>
+                      </div>
+                      <div className="space-y-3">
+                        {primaryOptions.map((opt) => (
+                          <div
+                            key={opt.id}
+                            onClick={() => setFormData({ ...formData, primaryConcern: opt.id })}
+                            className={cn(
+                              'p-4 rounded-2xl border transition-all cursor-pointer',
+                              formData.primaryConcern === opt.id
+                                ? 'border-neutral-950 bg-neutral-50/80 ring-1 ring-neutral-950'
+                                : 'border-neutral-200 hover:border-neutral-400'
+                            )}
+                          >
+                            <span className="text-sm font-bold text-neutral-950 block">{opt.title}</span>
+                            <span className="text-xs text-neutral-500">{opt.desc}</span>
+                          </div>
+                        ))}
+                      </div>
                       <button
                         type="button"
                         onClick={nextStep}
-                        className="w-full flex items-center justify-center bg-neutral-950 border border-neutral-950 py-4 rounded-full text-xs font-bold uppercase tracking-wider text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+                        className="w-full py-3.5 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold uppercase tracking-wider rounded-full transition-colors flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <span>Continue to Personal Details</span>
-                        <ArrowRight size={16} className="ml-2" />
+                        <span>Continue</span>
+                        <ArrowRight className="w-4 h-4" />
                       </button>
-                    </motion.div>
+                    </div>
                   )}
 
-                  {/* Step 2: Personal Information with strict validation */}
                   {step === 2 && (
-                    <motion.div
-                      key="step2"
-                      variants={pageVariants}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      transition={pageTransition}
-                      className="bg-white p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl border border-neutral-200/90 hover:border-neutral-950 transition-colors"
-                    >
-                      <span className="text-xs font-bold tracking-widest text-neutral-500 uppercase block mb-2">
-                        Personal Information
-                      </span>
-                      <h1 className="font-sans text-3xl sm:text-4xl font-extrabold text-neutral-950 mb-3 tracking-tight">
-                        A little about you
-                      </h1>
-                      <p className="text-neutral-600 text-sm sm:text-base mb-6 sm:mb-8">
-                        Your doctor tailors your treatment and prescription protocol based on your identity and records.
-                      </p>
-                      
-                      <div className="space-y-5">
+                    <div className="space-y-5">
+                      <div>
+                        <h2 className="text-2xl font-bold text-neutral-950">Personal & Contact Details</h2>
+                        <p className="text-xs text-neutral-500 mt-1">Required for legal clinical chart verification.</p>
+                      </div>
+
+                      <div className="space-y-4">
                         <div>
-                          <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 mb-2">
-                            Full Legal Name <span className="text-red-600">*</span>
-                          </label>
-                          <input 
-                            type="text" 
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Full Legal Name</label>
+                          <input
+                            type="text"
+                            placeholder="Jane Doe"
                             value={formData.fullName}
-                            onChange={(e) => {
-                              setFormData(prev => ({ ...prev, fullName: e.target.value }));
-                              if (errors.fullName) setErrors(prev => ({ ...prev, fullName: '' }));
-                            }}
-                            className={cn(
-                              "w-full rounded-xl border bg-white px-4 py-3 focus:outline-none text-sm text-neutral-950 transition-colors",
-                              errors.fullName 
-                                ? "border-red-500 focus:ring-2 focus:ring-red-400" 
-                                : "border-neutral-300 focus:ring-2 focus:ring-neutral-950"
-                            )}
-                            placeholder="e.g. Alex Morgan" 
+                            onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
                           />
-                          {errors.fullName && (
-                            <p className="text-xs font-medium text-red-600 mt-1.5 flex items-center gap-1">
-                              <AlertCircle size={13} /> {errors.fullName}
-                            </p>
-                          )}
+                          {errors.fullName && <p className="text-2xs text-rose-600 mt-1">{errors.fullName}</p>}
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 mb-2">
-                              Email Address <span className="text-red-600">*</span>
-                            </label>
-                            <input 
-                              type="email" 
-                              value={formData.email}
-                              onChange={(e) => {
-                                setFormData(prev => ({ ...prev, email: e.target.value }));
-                                if (errors.email) setErrors(prev => ({ ...prev, email: '' }));
-                              }}
-                              className={cn(
-                                "w-full rounded-xl border bg-white px-4 py-3 focus:outline-none text-sm text-neutral-950 transition-colors",
-                                errors.email 
-                                ? "border-red-500 focus:ring-2 focus:ring-red-400" 
-                                : "border-neutral-300 focus:ring-2 focus:ring-neutral-950"
-                              )}
-                              placeholder="Where your plan is sent" 
-                            />
-                            {errors.email && (
-                              <p className="text-xs font-medium text-red-600 mt-1.5 flex items-center gap-1">
-                                <AlertCircle size={13} /> {errors.email}
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 mb-2">
-                              Phone Number <span className="text-red-600">*</span>
-                            </label>
-                            <input 
-                              type="tel" 
-                              value={formData.phone}
-                              onChange={(e) => {
-                                setFormData(prev => ({ ...prev, phone: e.target.value }));
-                                if (errors.phone) setErrors(prev => ({ ...prev, phone: '' }));
-                              }}
-                              className={cn(
-                                "w-full rounded-xl border bg-white px-4 py-3 focus:outline-none text-sm text-neutral-950 transition-colors",
-                                errors.phone 
-                                ? "border-red-500 focus:ring-2 focus:ring-red-400" 
-                                : "border-neutral-300 focus:ring-2 focus:ring-neutral-950"
-                              )}
-                              placeholder="(555) 000-0000" 
-                            />
-                            {errors.phone && (
-                              <p className="text-xs font-medium text-red-600 mt-1.5 flex items-center gap-1">
-                                <AlertCircle size={13} /> {errors.phone}
-                              </p>
-                            )}
-                          </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Email Address</label>
+                          <input
+                            type="email"
+                            placeholder="jane@example.com"
+                            value={formData.email}
+                            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                          />
+                          {errors.email && <p className="text-2xs text-rose-600 mt-1">{errors.email}</p>}
                         </div>
-                        
-                        <button 
+
+                        <div>
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Phone Number</label>
+                          <input
+                            type="tel"
+                            placeholder="+1 (555) 000-0000"
+                            value={formData.phone}
+                            onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                          />
+                          {errors.phone && <p className="text-2xs text-rose-600 mt-1">{errors.phone}</p>}
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={prevStep}
+                          className="px-6 py-3 border border-neutral-200 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-50"
+                        >
+                          Back
+                        </button>
+                        <button
                           type="button"
                           onClick={nextStep}
-                          className="mt-6 w-full flex items-center justify-center bg-neutral-950 border border-neutral-950 py-4 rounded-full text-xs font-bold uppercase tracking-wider text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+                          className="flex-1 py-3 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold uppercase tracking-wider rounded-full transition-colors flex items-center justify-center gap-2"
                         >
-                          <span>Continue to Health Metrics</span>
-                          <ArrowRight size={16} className="ml-2" />
+                          <span>Continue</span>
+                          <ArrowRight className="w-4 h-4" />
                         </button>
                       </div>
-                    </motion.div>
+                    </div>
                   )}
 
-                  {/* Step 3: Physical Biometrics with Male, Female, Other buttons and input validation */}
                   {step === 3 && (
-                    <motion.div
-                      key="step3"
-                      variants={pageVariants}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      transition={pageTransition}
-                      className="bg-white p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl border border-neutral-200/90 hover:border-neutral-950 transition-colors"
-                    >
-                      <span className="text-xs font-bold tracking-widest text-neutral-500 uppercase block mb-2">
-                        Physical Biometrics
-                      </span>
-                      <h1 className="font-sans text-3xl sm:text-4xl font-extrabold text-neutral-950 mb-3 tracking-tight">
-                        Height, Weight & Sex
-                      </h1>
-                      <p className="text-neutral-600 text-sm sm:text-base mb-6 sm:mb-8">
-                        Required for accurate BMI and safe clinical starting dosages prescribed by our physicians.
-                      </p>
-                      
-                      <div className="space-y-5">
-                        {/* Biometrics Inputs with Unit Selectors (Inches/CM, LBS/KG) */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
-                          {/* Height Card */}
-                          <div className="bg-neutral-50/70 border border-neutral-200/90 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
-                            <div>
-                              <div className="flex items-center justify-between mb-2.5">
-                                <label className="block text-xs font-bold uppercase tracking-wider text-neutral-800">
-                                  Height <span className="text-red-600">*</span>
-                                </label>
-                                <span className="text-[11px] text-neutral-500 font-medium">Select Unit</span>
-                              </div>
+                    <div className="space-y-5">
+                      <div>
+                        <h2 className="text-2xl font-bold text-neutral-950">Patient Biometrics</h2>
+                        <p className="text-xs text-neutral-500 mt-1">Calculates body mass index & appropriate dosage thresholds.</p>
+                      </div>
 
-                              {/* Unit Selection Buttons (like sex selection) */}
-                              <div className="grid grid-cols-2 gap-2 mb-3.5">
-                                {(['inches', 'cm'] as const).map((unit) => {
-                                  const isSelected = formData.heightUnit === unit;
-                                  const label = unit === 'inches' ? 'Inches' : 'CM';
-                                  return (
-                                    <button
-                                      key={unit}
-                                      type="button"
-                                      onClick={() => {
-                                        setFormData(prev => ({ ...prev, heightUnit: unit }));
-                                      }}
-                                      className={cn(
-                                        "py-2 px-3 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer",
-                                        isSelected
-                                          ? "bg-neutral-950 text-white border-neutral-950 shadow-xs"
-                                          : "bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-100 hover:border-neutral-400"
-                                      )}
-                                    >
-                                      {isSelected && <Check size={13} strokeWidth={3} />}
-                                      <span>{label}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-
-                              {/* Height Input */}
-                              <div className="relative">
-                                <input 
-                                  type="text" 
-                                  value={formData.height}
-                                  onChange={(e) => {
-                                    setFormData(prev => ({ ...prev, height: e.target.value }));
-                                    if (errors.height) setErrors(prev => ({ ...prev, height: '' }));
-                                  }}
-                                  className={cn(
-                                    "w-full rounded-xl border bg-white px-4 py-3 pr-12 focus:outline-none text-sm text-neutral-950 transition-colors font-medium",
-                                    errors.height 
-                                      ? "border-red-500 focus:ring-2 focus:ring-red-400" 
-                                      : "border-neutral-300 focus:ring-2 focus:ring-neutral-950"
-                                  )}
-                                  placeholder={formData.heightUnit === 'inches' ? "e.g. 5'10\" or 70" : "e.g. 178"} 
-                                />
-                                <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-neutral-400 pointer-events-none uppercase">
-                                  {formData.heightUnit === 'inches' ? 'IN' : 'CM'}
-                                </span>
-                              </div>
-                            </div>
-
-                            {errors.height && (
-                              <p className="text-xs font-medium text-red-600 mt-2 flex items-center gap-1">
-                                <AlertCircle size={13} /> {errors.height}
-                              </p>
-                            )}
-                          </div>
-
-                          {/* Weight Card */}
-                          <div className="bg-neutral-50/70 border border-neutral-200/90 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
-                            <div>
-                              <div className="flex items-center justify-between mb-2.5">
-                                <label className="block text-xs font-bold uppercase tracking-wider text-neutral-800">
-                                  Weight <span className="text-red-600">*</span>
-                                </label>
-                                <span className="text-[11px] text-neutral-500 font-medium">Select Unit</span>
-                              </div>
-
-                              {/* Unit Selection Buttons (like sex selection) */}
-                              <div className="grid grid-cols-2 gap-2 mb-3.5">
-                                {(['lbs', 'kg'] as const).map((unit) => {
-                                  const isSelected = formData.weightUnit === unit;
-                                  const label = unit === 'lbs' ? 'LBS' : 'KG';
-                                  return (
-                                    <button
-                                      key={unit}
-                                      type="button"
-                                      onClick={() => {
-                                        setFormData(prev => ({ ...prev, weightUnit: unit }));
-                                      }}
-                                      className={cn(
-                                        "py-2 px-3 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer",
-                                        isSelected
-                                          ? "bg-neutral-950 text-white border-neutral-950 shadow-xs"
-                                          : "bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-100 hover:border-neutral-400"
-                                      )}
-                                    >
-                                      {isSelected && <Check size={13} strokeWidth={3} />}
-                                      <span>{label}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-
-                              {/* Weight Input */}
-                              <div className="relative">
-                                <input 
-                                  type="text" 
-                                  value={formData.weight}
-                                  onChange={(e) => {
-                                    setFormData(prev => ({ ...prev, weight: e.target.value }));
-                                    if (errors.weight) setErrors(prev => ({ ...prev, weight: '' }));
-                                  }}
-                                  className={cn(
-                                    "w-full rounded-xl border bg-white px-4 py-3 pr-12 focus:outline-none text-sm text-neutral-950 transition-colors font-medium",
-                                    errors.weight 
-                                      ? "border-red-500 focus:ring-2 focus:ring-red-400" 
-                                      : "border-neutral-300 focus:ring-2 focus:ring-neutral-950"
-                                  )}
-                                  placeholder={formData.weightUnit === 'lbs' ? "e.g. 185" : "e.g. 84"} 
-                                />
-                                <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-neutral-400 pointer-events-none uppercase">
-                                  {formData.weightUnit === 'lbs' ? 'LBS' : 'KG'}
-                                </span>
-                              </div>
-                            </div>
-
-                            {errors.weight && (
-                              <p className="text-xs font-medium text-red-600 mt-2 flex items-center gap-1">
-                                <AlertCircle size={13} /> {errors.weight}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
+                      <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700">
-                              Biological Sex at Birth <span className="text-red-600">*</span>
-                            </label>
-                            <span className="text-[11px] text-neutral-500">Required for clinical dosing</span>
-                          </div>
-                          <div className="grid grid-cols-3 gap-3">
-                            {(['male', 'female', 'other'] as const).map((genderOption) => {
-                              const isSelected = formData.sex === genderOption;
-                              const label = genderOption === 'male' ? 'Male' : genderOption === 'female' ? 'Female' : 'Other';
-                              return (
-                                <button
-                                  key={genderOption}
-                                  type="button"
-                                  onClick={() => {
-                                    setFormData(prev => ({ ...prev, sex: genderOption }));
-                                    if (errors.sex) setErrors(prev => ({ ...prev, sex: '' }));
-                                  }}
-                                  className={cn(
-                                    "py-3 px-4 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer",
-                                    isSelected
-                                      ? "bg-neutral-950 text-white border-neutral-950 shadow-xs"
-                                      : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100 hover:border-neutral-400"
-                                  )}
-                                >
-                                  {isSelected && <Check size={14} strokeWidth={3} />}
-                                  <span>{label}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                          {errors.sex && (
-                            <p className="text-xs font-medium text-red-600 mt-2 flex items-center gap-1">
-                              <AlertCircle size={13} /> {errors.sex}
-                            </p>
-                          )}
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Height (inches)</label>
+                          <input
+                            type="number"
+                            placeholder="68"
+                            value={formData.height}
+                            onChange={(e) => setFormData({ ...formData, height: e.target.value })}
+                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                          />
+                          {errors.height && <p className="text-2xs text-rose-600 mt-1">{errors.height}</p>}
                         </div>
-                        
-                        <button 
+                        <div>
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Weight (lbs)</label>
+                          <input
+                            type="number"
+                            placeholder="165"
+                            value={formData.weight}
+                            onChange={(e) => setFormData({ ...formData, weight: e.target.value })}
+                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                          />
+                          {errors.weight && <p className="text-2xs text-rose-600 mt-1">{errors.weight}</p>}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-neutral-700 mb-1">Biological Sex</label>
+                        <div className="grid grid-cols-3 gap-3">
+                          {['female', 'male', 'other'].map((sex) => (
+                            <button
+                              key={sex}
+                              type="button"
+                              onClick={() => setFormData({ ...formData, sex: sex as any })}
+                              className={cn(
+                                'py-2.5 rounded-xl border text-xs font-semibold capitalize transition-all cursor-pointer',
+                                formData.sex === sex
+                                  ? 'border-neutral-950 bg-neutral-950 text-white'
+                                  : 'border-neutral-200 text-neutral-700 hover:bg-neutral-50'
+                              )}
+                            >
+                              {sex}
+                            </button>
+                          ))}
+                        </div>
+                        {errors.sex && <p className="text-2xs text-rose-600 mt-1">{errors.sex}</p>}
+                      </div>
+
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={prevStep}
+                          className="px-6 py-3 border border-neutral-200 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-50"
+                        >
+                          Back
+                        </button>
+                        <button
                           type="button"
                           onClick={nextStep}
-                          className="mt-6 w-full flex items-center justify-center bg-neutral-950 border border-neutral-950 py-4 rounded-full text-xs font-bold uppercase tracking-wider text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+                          className="flex-1 py-3 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold uppercase tracking-wider rounded-full transition-colors flex items-center justify-center gap-2"
                         >
-                          <span>Continue to Medical History</span>
-                          <ArrowRight size={16} className="ml-2" />
+                          <span>Continue</span>
+                          <ArrowRight className="w-4 h-4" />
                         </button>
                       </div>
-                    </motion.div>
+                    </div>
                   )}
 
-                  {/* Step 4: Medical History & Conditions */}
                   {step === 4 && (
-                    <motion.div
-                      key="step4"
-                      variants={pageVariants}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      transition={pageTransition}
-                      className="bg-white p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl border border-neutral-200/90 hover:border-neutral-950 transition-colors"
-                    >
-                      <span className="text-xs font-bold tracking-widest text-neutral-500 uppercase block mb-2">
-                        Safety Clearance
-                      </span>
-                      <h1 className="font-sans text-3xl sm:text-4xl font-extrabold text-neutral-950 mb-3 tracking-tight">
-                        Medical History
-                      </h1>
-                      <p className="text-neutral-600 text-sm sm:text-base mb-6 sm:mb-8">
-                        The more accurate your answers, the safer your customized protocol.
-                      </p>
-                      
-                      <div className="space-y-6">
-                        <div>
-                          <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 mb-3">
-                            Check all that apply to you or your family: <span className="text-red-600">*</span>
-                          </label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {['Diabetes', 'Heart Disease', 'High Blood Pressure', 'Thyroid Disorder', 'Kidney Disease', 'None of the above'].map(condition => {
-                              const isChecked = formData.conditions.includes(condition);
-                              return (
-                                <button
-                                  type="button"
-                                  key={condition}
-                                  onClick={() => toggleCondition(condition)}
-                                  className={cn(
-                                    "flex items-center justify-between p-3.5 rounded-xl border text-xs font-medium transition-all text-left cursor-pointer",
-                                    isChecked
-                                      ? "border-neutral-950 bg-neutral-100 font-bold text-neutral-950"
-                                      : "border-neutral-200 bg-neutral-50/70 text-neutral-800 hover:bg-neutral-100"
-                                  )}
-                                >
-                                  <span>{condition}</span>
-                                  <div className={cn(
-                                    "w-4 h-4 rounded border flex items-center justify-center shrink-0 ml-2 transition-colors",
-                                    isChecked ? "bg-neutral-950 border-neutral-950 text-white" : "border-neutral-300 bg-white text-transparent"
-                                  )}>
-                                    <Check size={11} strokeWidth={3} />
-                                  </div>
-                                </button>
-                              );
-                            })}
+                    <div className="space-y-5">
+                      <div>
+                        <h2 className="text-2xl font-bold text-neutral-950">Medical History & Screening</h2>
+                        <p className="text-xs text-neutral-500 mt-1">Select any current or past medical conditions.</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        {[
+                          'Hypertension (High Blood Pressure)',
+                          'Type 2 Diabetes / Prediabetes',
+                          'Thyroid Disease or Family History of MTC',
+                          'Cardiovascular or Kidney Conditions',
+                          'Currently Pregnant or Breastfeeding',
+                          'None of the above',
+                        ].map((c) => (
+                          <div
+                            key={c}
+                            onClick={() => toggleCondition(c)}
+                            className={cn(
+                              'p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between text-xs',
+                              formData.conditions.includes(c)
+                                ? 'border-neutral-950 bg-neutral-50 text-neutral-950 font-semibold'
+                                : 'border-neutral-200 text-neutral-700 hover:bg-neutral-50'
+                            )}
+                          >
+                            <span>{c}</span>
+                            {formData.conditions.includes(c) && <Check className="w-4 h-4 text-neutral-950" />}
                           </div>
-                          {errors.conditions && (
-                            <p className="text-xs font-medium text-red-600 mt-2 flex items-center gap-1">
-                              <AlertCircle size={13} /> {errors.conditions}
-                            </p>
-                          )}
-                        </div>
+                        ))}
+                      </div>
+                      {errors.conditions && <p className="text-2xs text-rose-600">{errors.conditions}</p>}
 
-                        <div>
-                          <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 mb-2">
-                            Other Known Medical Conditions (Optional)
-                          </label>
-                          <textarea 
-                            value={formData.medicalHistory}
-                            onChange={(e) => setFormData(prev => ({ ...prev, medicalHistory: e.target.value }))}
-                            className="w-full rounded-xl border border-neutral-300 bg-white p-4 focus:outline-none focus:ring-2 focus:ring-neutral-950 text-sm text-neutral-950 resize-none h-24" 
-                            placeholder="List any diagnosed conditions (e.g. asthma, sleep apnea, or write 'None')" 
-                          />
-                        </div>
-                        
-                        <button 
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={prevStep}
+                          className="px-6 py-3 border border-neutral-200 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-50"
+                        >
+                          Back
+                        </button>
+                        <button
                           type="button"
                           onClick={nextStep}
-                          className="mt-6 w-full flex items-center justify-center bg-neutral-950 border border-neutral-950 py-4 rounded-full text-xs font-bold uppercase tracking-wider text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+                          className="flex-1 py-3 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold uppercase tracking-wider rounded-full transition-colors flex items-center justify-center gap-2"
                         >
-                          <span>Continue to Current Medications</span>
-                          <ArrowRight size={16} className="ml-2" />
+                          <span>Continue</span>
+                          <ArrowRight className="w-4 h-4" />
                         </button>
                       </div>
-                    </motion.div>
+                    </div>
                   )}
 
-                  {/* Step 5: Current Medications & Allergies */}
                   {step === 5 && (
-                    <motion.div
-                      key="step5"
-                      variants={pageVariants}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      transition={pageTransition}
-                      className="bg-white p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl border border-neutral-200/90 hover:border-neutral-950 transition-colors"
-                    >
-                      <span className="text-xs font-bold tracking-widest text-neutral-500 uppercase block mb-2">
-                        Interaction Check
-                      </span>
-                      <h1 className="font-sans text-3xl sm:text-4xl font-extrabold text-neutral-950 mb-3 tracking-tight">
-                        Current Medications & Allergies
-                      </h1>
-                      <p className="text-neutral-600 text-sm sm:text-base mb-6 sm:mb-8">
-                        Include daily prescriptions, over-the-counter medicines, or dietary supplements to avoid contraindications.
-                      </p>
-                      
-                      <div className="space-y-5">
+                    <div className="space-y-5">
+                      <div>
+                        <h2 className="text-2xl font-bold text-neutral-950">Current Medications & Allergies</h2>
+                        <p className="text-xs text-neutral-500 mt-1">Prevents harmful prescription drug interactions.</p>
+                      </div>
+
+                      <div className="space-y-4">
                         <div>
-                          <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 mb-2">
-                            Active Medications
-                          </label>
-                          <textarea 
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Current Medications (or 'None')</label>
+                          <textarea
+                            rows={3}
+                            placeholder="List all prescription drugs, supplements, or write None"
                             value={formData.medications}
-                            onChange={(e) => setFormData(prev => ({ ...prev, medications: e.target.value }))}
-                            className="w-full rounded-xl border border-neutral-300 bg-white p-4 focus:outline-none focus:ring-2 focus:ring-neutral-950 text-sm text-neutral-950 resize-none h-24" 
-                            placeholder="List any medications you currently take daily or occasionally (or write 'None')" 
+                            onChange={(e) => setFormData({ ...formData, medications: e.target.value })}
+                            className="w-full rounded-xl border border-neutral-200 p-3 text-xs focus:border-neutral-950 focus:outline-none"
                           />
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold uppercase tracking-wider text-neutral-700 mb-2">
-                            Known Drug or Food Allergies
-                          </label>
-                          <textarea 
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">Known Drug Allergies (or 'None')</label>
+                          <textarea
+                            rows={3}
+                            placeholder="List any medication allergies or write None"
                             value={formData.allergies}
-                            onChange={(e) => setFormData(prev => ({ ...prev, allergies: e.target.value }))}
-                            className="w-full rounded-xl border border-neutral-300 bg-white p-4 focus:outline-none focus:ring-2 focus:ring-neutral-950 text-sm text-neutral-950 resize-none h-20" 
-                            placeholder="List any known drug reactions (or write 'No known allergies')" 
+                            onChange={(e) => setFormData({ ...formData, allergies: e.target.value })}
+                            className="w-full rounded-xl border border-neutral-200 p-3 text-xs focus:border-neutral-950 focus:outline-none"
                           />
                         </div>
-                        
-                        <button 
+                      </div>
+
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={prevStep}
+                          className="px-6 py-3 border border-neutral-200 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-50"
+                        >
+                          Back
+                        </button>
+                        <button
                           type="button"
                           onClick={nextStep}
-                          className="mt-6 w-full flex items-center justify-center bg-neutral-950 border border-neutral-950 py-4 rounded-full text-xs font-bold uppercase tracking-wider text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+                          className="flex-1 py-3 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold uppercase tracking-wider rounded-full transition-colors flex items-center justify-center gap-2"
                         >
-                          <span>Review & Confirm</span>
-                          <ArrowRight size={16} className="ml-2" />
+                          <span>Review & Sign</span>
+                          <ArrowRight className="w-4 h-4" />
                         </button>
                       </div>
-                    </motion.div>
+                    </div>
                   )}
 
-                  {/* Step 6: Confirm Clinical Consent */}
                   {step === 6 && (
-                    <motion.div
-                      key="step6"
-                      variants={pageVariants}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      transition={pageTransition}
-                      className="bg-white p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl border border-neutral-200/90 hover:border-neutral-950 transition-colors"
-                    >
-                      <span className="text-xs font-bold tracking-widest text-neutral-500 uppercase block mb-2">
-                        Final Step
-                      </span>
-                      <h1 className="font-sans text-3xl sm:text-4xl font-extrabold text-neutral-950 mb-3 tracking-tight">
-                        Confirm Clinical Consent
-                      </h1>
-                      <p className="text-neutral-600 text-sm sm:text-base mb-6 sm:mb-8">
-                        Review the clinical terms. Once submitted, your chart will be reviewed by a licensed doctor within 24 hours.
-                      </p>
-                      
-                      <div className="space-y-4 mb-6 sm:mb-8">
-                        <label className="flex items-start gap-3 p-4 rounded-2xl border border-neutral-200 bg-neutral-50 cursor-pointer">
-                          <input 
-                            type="checkbox" 
+                    <div className="space-y-5">
+                      <div>
+                        <h2 className="text-2xl font-bold text-neutral-950">Review & Telehealth Consent</h2>
+                        <p className="text-xs text-neutral-500 mt-1">Review clinical terms before submitting for physician evaluation.</p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="flex items-start gap-3 p-3.5 rounded-xl border border-neutral-200 bg-neutral-50 cursor-pointer">
+                          <input
+                            type="checkbox"
                             checked={formData.consentTruth}
-                            onChange={(e) => setFormData(prev => ({ ...prev, consentTruth: e.target.checked }))}
-                            className="mt-1 w-4 h-4 rounded text-neutral-950 focus:ring-neutral-950 cursor-pointer" 
+                            onChange={(e) => setFormData({ ...formData, consentTruth: e.target.checked })}
+                            className="mt-0.5 rounded text-neutral-950 focus:ring-neutral-950"
                           />
-                          <span className="text-xs text-neutral-700 leading-relaxed">
-                            <strong className="text-neutral-950 block mb-0.5">Truthfulness of Health Data</strong>
-                            I confirm that all medical history and information provided is accurate and truthful.
+                          <span className="text-xs text-neutral-700">
+                            <strong>Truthfulness:</strong> I confirm that all health information provided is accurate and complete.
                           </span>
                         </label>
-                        <label className="flex items-start gap-3 p-4 rounded-2xl border border-neutral-200 bg-neutral-50 cursor-pointer">
-                          <input 
-                            type="checkbox" 
+
+                        <label className="flex items-start gap-3 p-3.5 rounded-xl border border-neutral-200 bg-neutral-50 cursor-pointer">
+                          <input
+                            type="checkbox"
                             checked={formData.consentTelehealth}
-                            onChange={(e) => setFormData(prev => ({ ...prev, consentTelehealth: e.target.checked }))}
-                            className="mt-1 w-4 h-4 rounded text-neutral-950 focus:ring-neutral-950 cursor-pointer" 
+                            onChange={(e) => setFormData({ ...formData, consentTelehealth: e.target.checked })}
+                            className="mt-0.5 rounded text-neutral-950 focus:ring-neutral-950"
                           />
-                          <span className="text-xs text-neutral-700 leading-relaxed">
-                            <strong className="text-neutral-950 block mb-0.5">Telehealth Medical Consent</strong>
-                            I consent to receive telehealth clinical evaluations and treatment from a US-licensed healthcare provider.
+                          <span className="text-xs text-neutral-700">
+                            <strong>Telehealth Evaluation:</strong> I consent to receive asynchronous clinical evaluation by a licensed physician.
                           </span>
                         </label>
-                        <label className="flex items-start gap-3 p-4 rounded-2xl border border-neutral-200 bg-neutral-50 cursor-pointer">
-                          <input 
-                            type="checkbox" 
+
+                        <label className="flex items-start gap-3 p-3.5 rounded-xl border border-neutral-200 bg-neutral-50 cursor-pointer">
+                          <input
+                            type="checkbox"
                             checked={formData.consentPrivacy}
-                            onChange={(e) => setFormData(prev => ({ ...prev, consentPrivacy: e.target.checked }))}
-                            className="mt-1 w-4 h-4 rounded text-neutral-950 focus:ring-neutral-950 cursor-pointer" 
+                            onChange={(e) => setFormData({ ...formData, consentPrivacy: e.target.checked })}
+                            className="mt-0.5 rounded text-neutral-950 focus:ring-neutral-950"
                           />
-                          <span className="text-xs text-neutral-700 leading-relaxed">
-                            <strong className="text-neutral-950 block mb-0.5">Confidentiality & Data Protection</strong>
-                            I acknowledge that my health records are strictly confidential and securely protected under federal medical privacy regulations.
+                          <span className="text-xs text-neutral-700">
+                            <strong>Medical Privacy:</strong> I acknowledge that my health records are encrypted and protected under healthcare confidentiality regulations.
                           </span>
                         </label>
                       </div>
 
                       {errors.consent && (
-                        <p className="text-xs font-medium text-red-600 mb-4 flex items-center gap-1">
-                          <AlertCircle size={14} /> {errors.consent}
-                        </p>
+                        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>{errors.consent}</span>
+                        </div>
                       )}
-                      
-                      <button 
-                        type="button"
-                        onClick={handleSubmit}
-                        className="w-full flex items-center justify-center bg-neutral-950 border border-neutral-950 py-4 rounded-full text-xs font-bold uppercase tracking-wider text-white hover:bg-neutral-800 transition-colors cursor-pointer"
-                      >
-                        <CheckCircle2 size={18} className="mr-2" />
-                        Submit for Doctor Review
-                      </button>
-                    </motion.div>
+
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={prevStep}
+                          className="px-6 py-3 border border-neutral-200 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-50"
+                        >
+                          Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSubmit}
+                          className="flex-1 py-3.5 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold uppercase tracking-wider rounded-full transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>Submit for Doctor Review</span>
+                        </button>
+                      </div>
+                    </div>
                   )}
-                </AnimatePresence>
-              </>
-            ) : isAnalyzing ? (
-              /* Monochromatic Skeleton Analyzing Screen */
-              <motion.div
-                key="analyzing-skeleton"
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.98 }}
-                className="bg-white p-6 sm:p-10 md:p-12 rounded-2xl sm:rounded-3xl border border-neutral-200/90 shadow-none space-y-6"
-              >
-                <div className="flex items-center justify-between border-b border-neutral-200/80 pb-4">
-                  <div className="flex items-center gap-3">
-                    <Loader2 size={20} className="animate-spin text-neutral-950" />
+                </div>
+              ) : isAnalyzing ? (
+                /* Analyzing skeleton */
+                <div className="bg-white p-8 rounded-3xl border border-neutral-200 space-y-6">
+                  <div className="flex items-center gap-3 border-b border-neutral-100 pb-4">
+                    <Loader2 className="w-5 h-5 animate-spin text-neutral-950" />
                     <div>
                       <span className="text-xs font-bold uppercase tracking-wider text-neutral-950 block">
-                        Compiling Clinical Intake
+                        Submitting Clinical Intake
                       </span>
-                      <span className="text-[11px] text-neutral-500">
-                        {analyzingStage === 0 && "Securing clinical health chart..."}
-                        {analyzingStage === 1 && "Cross-referencing FDA formulary contraindications..."}
-                        {analyzingStage === 2 && "Connecting with state-licensed medical board physician..."}
+                      <span className="text-2xs text-neutral-500">
+                        {analyzingStage === 0 && 'Securing clinical health chart in database...'}
+                        {analyzingStage === 1 && 'Assigning state-licensed telehealth physician...'}
+                        {analyzingStage === 2 && 'Creating doctor clinical review task & notification...'}
                       </span>
                     </div>
                   </div>
-                  <span className="text-xs font-mono font-bold text-neutral-400">
-                    {analyzingStage === 0 ? "35%" : analyzingStage === 1 ? "75%" : "98%"}
-                  </span>
-                </div>
-
-                {/* Monochromatic Skeleton Shimmer Rows */}
-                <div className="space-y-4 pt-2">
-                  <div className="flex items-center gap-4">
-                    <Skeleton className="w-12 h-12 rounded-full shrink-0" />
-                    <div className="space-y-2 flex-grow">
-                      <Skeleton className="h-4 w-48" />
-                      <Skeleton className="h-3 w-32" />
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-2xl bg-neutral-50/90 border border-neutral-200/70 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <Skeleton className="h-4 w-28" />
-                      <Skeleton className="h-4 w-16 rounded-full" />
-                    </div>
-                    <Skeleton className="h-3 w-full" />
-                    <Skeleton className="h-3 w-4/5" />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 pt-2">
-                    <div className="p-3.5 rounded-xl border border-neutral-200/60 space-y-2">
-                      <Skeleton className="h-3 w-16" />
-                      <Skeleton className="h-5 w-24" />
-                    </div>
-                    <div className="p-3.5 rounded-xl border border-neutral-200/60 space-y-2">
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-5 w-28" />
-                    </div>
-                  </div>
-
-                  <div className="pt-2">
-                    <Skeleton className="h-11 w-full rounded-full" />
+                  <div className="space-y-3 pt-2">
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="h-12 w-full rounded-xl" />
+                    <Skeleton className="h-12 w-full rounded-xl" />
                   </div>
                 </div>
-              </motion.div>
-            ) : (
-              /* Success Submission Screen with personalized chart recap */
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-white p-6 sm:p-10 md:p-12 rounded-2xl sm:rounded-3xl border border-neutral-200/90 text-center"
-              >
-                <div className="w-16 h-16 rounded-full bg-neutral-100 flex items-center justify-center text-neutral-950 mx-auto mb-6">
-                  <CheckCircle2 size={32} />
-                </div>
-                <span className="text-xs font-bold uppercase tracking-widest text-neutral-500 block mb-2">
-                  Intake Received
-                </span>
-                <h2 className="font-sans text-3xl font-extrabold text-neutral-950 tracking-tight mb-2">
-                  {formData.fullName ? `${formData.fullName}, your chart is in review.` : 'Your medical intake is in review.'}
-                </h2>
-                <p className="text-neutral-600 text-sm sm:text-base leading-relaxed max-w-md mx-auto mb-6 sm:mb-8">
-                  A licensed US physician is reviewing your health records. Confirmation will be sent to <strong className="text-neutral-900">{formData.email || 'your email'}</strong> within 24 hours.
-                </p>
-                <div className="p-5 rounded-2xl bg-neutral-50 border border-neutral-200/80 max-w-md mx-auto mb-6 sm:mb-8 text-xs text-neutral-700 text-left space-y-2.5">
-                  <div className="flex justify-between pb-1.5 border-b border-neutral-200/50">
-                    <span className="font-medium text-neutral-600">Clinical Focus:</span>
-                    <span className="font-bold text-neutral-950">
-                      {formData.primaryConcern === 'weight' ? 'Medical Weight Loss (GLP-1)' : formData.primaryConcern === 'hair' ? 'Hair Growth & Density' : 'Sexual Health'}
+              ) : (
+                /* Success Screen */
+                <div className="bg-white p-8 sm:p-10 rounded-3xl border border-neutral-200 text-center space-y-6">
+                  <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-800 flex items-center justify-center mx-auto border border-emerald-200">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-700" />
+                  </div>
+                  <div className="space-y-2">
+                    <span className="text-2xs font-bold uppercase tracking-widest text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                      Intake Received & Assigned
                     </span>
+                    <h2 className="text-2xl font-bold text-neutral-950">Your chart is in physician review</h2>
+                    <p className="text-xs text-neutral-600 max-w-md mx-auto leading-relaxed">
+                      A licensed physician has been notified and is reviewing your health records. You will receive an in-app notification and email once your clinical evaluation is approved.
+                    </p>
                   </div>
-                  {formData.height && formData.weight && (
-                    <div className="flex justify-between pb-1.5 border-b border-neutral-200/50">
-                      <span className="font-medium text-neutral-600">Patient Biometrics:</span>
-                      <span className="font-bold text-neutral-950">
-                        {formData.height} {formData.heightUnit === 'inches' ? 'in' : 'cm'} • {formData.weight} {formData.weightUnit === 'lbs' ? 'lbs' : 'kg'}
-                      </span>
+                  <div className="p-4 rounded-2xl bg-neutral-50 border border-neutral-200 max-w-md mx-auto text-left text-xs space-y-2">
+                    <div className="flex justify-between border-b border-neutral-200/60 pb-1.5">
+                      <span className="text-neutral-500">Patient:</span>
+                      <span className="font-semibold text-neutral-900">{formData.fullName || 'Verified Patient'}</span>
                     </div>
-                  )}
-                  <div className="flex justify-between pb-1.5 border-b border-neutral-200/50">
-                    <span className="font-medium text-neutral-600">Status:</span>
-                    <span className="font-bold text-neutral-950">Under Clinician Review</span>
+                    <div className="flex justify-between border-b border-neutral-200/60 pb-1.5">
+                      <span className="text-neutral-500">Status:</span>
+                      <span className="font-semibold text-neutral-900">Physician Review Queue</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">Expected Response:</span>
+                      <span className="font-semibold text-neutral-900">&lt; 24 Hours</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between pb-1.5 border-b border-neutral-200/50">
-                    <span className="font-medium text-neutral-600">Turnaround:</span>
-                    <span>&lt; 24 Hours</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-medium text-neutral-600">Delivery:</span>
-                    <span>Free 2-Day Discreet Packaging</span>
-                  </div>
+                  <Link
+                    to="/account"
+                    className="inline-flex items-center justify-center bg-neutral-950 text-white px-8 py-3 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-800 transition-colors"
+                  >
+                    Go to My Account
+                  </Link>
                 </div>
-                <Link
-                  to="/account"
-                  className="inline-flex items-center justify-center bg-neutral-950 border border-neutral-950 text-white px-8 py-3.5 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-800 transition-colors"
-                >
-                  <ArrowLeft size={16} className="mr-2" />
-                  Go to My Account
-                </Link>
-              </motion.div>
-            )}
-
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </main>
+
+      {/* Payment Phase Placeholder Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mx-auto text-stone-900">
+              <Info className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-neutral-950">Payment Integration</h3>
+              <p className="text-xs text-neutral-600 leading-relaxed">
+                Payment integration will be enabled in a later phase. Your prescription choice has been safely recorded and your consultation is marked <strong>Ready for Pharmacy</strong>.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowPaymentModal(false)}
+              className="w-full py-3 bg-neutral-950 text-white rounded-full text-xs font-bold uppercase tracking-wider hover:bg-neutral-800 transition-colors cursor-pointer"
+            >
+              Understood
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

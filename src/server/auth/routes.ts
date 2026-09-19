@@ -139,3 +139,91 @@ authRouter.get('/test/accounts', (req: Request, res: Response): void => {
     })),
   });
 });
+
+/**
+ * Server-side auto-provision and login helper for designated test doctor.
+ * Validates credentials strictly against server environment variables.
+ * Never leaks TEST_DOCTOR_PASSWORD to the client.
+ */
+authRouter.post('/doctor-login', async (req: Request, res: Response): Promise<void> => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    res.status(400).json({ error: 'Email and password are required.' });
+    return;
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const testDoctorEmail = process.env.TEST_DOCTOR_EMAIL?.trim().toLowerCase();
+  const testDoctorPassword = process.env.TEST_DOCTOR_PASSWORD?.trim();
+
+  // If matching configured TEST_DOCTOR credentials, ensure provisioned and sign in
+  if (testDoctorEmail && normalizedEmail === testDoctorEmail && testDoctorPassword && password === testDoctorPassword) {
+    try {
+      // Ensure provisioned in Supabase Auth
+      await provisionDesignatedTestAccount(testDoctorEmail, testDoctorPassword);
+
+      // Sign in with Supabase to generate valid JWT session
+      const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+        email: testDoctorEmail,
+        password: testDoctorPassword,
+      });
+
+      if (error || !data.session) {
+        throw new Error(error?.message || 'Failed to authenticate test doctor');
+      }
+
+      res.json({
+        success: true,
+        session: data.session,
+        user: {
+          id: data.user.id,
+          email: data.user.email,
+          role: 'doctor',
+        },
+      });
+      return;
+    } catch (err: any) {
+      console.error('[AuthRoutes] doctor-login error:', err.message);
+      res.status(500).json({ error: err.message || 'Failed to authenticate doctor' });
+      return;
+    }
+  }
+
+  // Otherwise, attempt standard Supabase password authentication
+  try {
+    const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+      email: normalizedEmail,
+      password: password,
+    });
+
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Invalid clinical credentials.' });
+      return;
+    }
+
+    // Verify role in profiles / staff_profiles
+    const { data: staff } = await supabaseAdmin
+      .from('staff_profiles')
+      .select('role, active')
+      .eq('id', data.user.id)
+      .maybeSingle();
+
+    if (!staff || (staff.role !== 'doctor' && staff.role !== 'admin')) {
+      res.status(403).json({ error: 'Forbidden: Account does not have clinical doctor authorization.' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      session: data.session,
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        role: staff.role,
+      },
+    });
+  } catch (err: any) {
+    console.error('[AuthRoutes] doctor-login standard auth error:', err.message);
+    res.status(401).json({ error: 'Invalid clinical credentials.' });
+  }
+});
