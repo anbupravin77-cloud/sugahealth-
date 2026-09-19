@@ -123,6 +123,7 @@ const PORT = 3000;
   // Supabase Auth & Test accounts layer
   app.use('/api/auth', authRouter);
   app.use('/api/clinical', clinicalRouter);
+  app.use('/api', clinicalRouter);
 
   // Public: Get published content
   app.get('/api/content', (req, res) => {
@@ -319,19 +320,26 @@ const PORT = 3000;
     try {
       const { email, role, specialties, firstName, lastName } = req.body;
       
-      if (!email || !role || !['doctor', 'pharmacist', 'admin'].includes(role)) {
-        res.status(400).json({ error: 'Valid email and role are required' });
+      // Restrict role to 'doctor' | 'pharmacist' (forbid 'admin' provisioning here)
+      if (!email || !role || !['doctor', 'pharmacist'].includes(role)) {
+        res.status(400).json({ error: 'Valid email and clinical staff role (doctor or pharmacist) are required' });
+        return;
+      }
+
+      if (!firstName || !lastName || typeof firstName !== 'string' || typeof lastName !== 'string') {
+        res.status(400).json({ error: 'First name and last name are required for clinical staff provisioning' });
         return;
       }
 
       const decodedToken = (req as any).user;
       const adminUid = decodedToken?.uid || 'admin';
       const timestamp = new Date().toISOString();
-      const displayName = `${firstName || ''} ${lastName || ''}`.trim() || email;
+      const displayName = `${firstName.trim()} ${lastName.trim()}`.trim() || email;
       const formattedSpecialties = role === 'doctor' ? (Array.isArray(specialties) ? specialties : []) : null;
 
       let targetUid = '';
       let setupLink = '';
+      let isNewlyCreated = false;
 
       // 1. Provision user via canonical Supabase Auth Admin API
       try {
@@ -339,8 +347,8 @@ const PORT = 3000;
           email,
           email_confirm: true,
           user_metadata: {
-            first_name: firstName || null,
-            last_name: lastName || null,
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
             displayName,
             role,
           },
@@ -358,7 +366,7 @@ const PORT = 3000;
               targetUid = existingUser.id;
               await supabaseAdmin.auth.admin.updateUserById(targetUid, {
                 app_metadata: { role },
-                user_metadata: { role, first_name: firstName, last_name: lastName, displayName },
+                user_metadata: { role, first_name: firstName.trim(), last_name: lastName.trim(), displayName },
               });
             } else {
               throw createError;
@@ -368,6 +376,7 @@ const PORT = 3000;
           }
         } else if (createData?.user) {
           targetUid = createData.user.id;
+          isNewlyCreated = true;
         }
 
         // Generate password reset / magic link for initial access
@@ -398,37 +407,47 @@ const PORT = 3000;
       }
 
       // 2. Persist in canonical Supabase public.profiles table
-      try {
-        await supabaseAdmin.from('profiles').upsert({
-          id: targetUid,
-          email,
-          role,
-          first_name: firstName || null,
-          last_name: lastName || null,
-          display_name: displayName,
-          created_at: timestamp,
-          updated_at: timestamp,
-        });
-      } catch (sbErr: any) {
-        console.warn('Supabase staff profile upsert warning:', sbErr.message);
+      const { error: profileError } = await supabaseAdmin.from('profiles').upsert({
+        id: targetUid,
+        email,
+        role,
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        display_name: displayName,
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+
+      if (profileError) {
+        console.error('Supabase staff profile upsert error:', profileError.message);
+        if (isNewlyCreated) {
+          await supabaseAdmin.auth.admin.deleteUser(targetUid).catch(() => {});
+        }
+        res.status(500).json({ error: 'Failed to persist staff profile in database', details: profileError.message });
+        return;
       }
 
       // 3. Persist in canonical Supabase public.staff_profiles table
-      try {
-        await supabaseAdmin.from('staff_profiles').upsert({
-          id: targetUid,
-          email,
-          role,
-          active: true,
-          onboarding_status: 'completed',
-          first_name: firstName || null,
-          last_name: lastName || null,
-          specialties: formattedSpecialties,
-          created_at: timestamp,
-          updated_at: timestamp,
-        });
-      } catch (sbErr: any) {
-        console.warn('Supabase staff_profiles upsert warning:', sbErr.message);
+      const { error: staffError } = await supabaseAdmin.from('staff_profiles').upsert({
+        id: targetUid,
+        email,
+        role,
+        active: true,
+        onboarding_status: 'completed',
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        specialties: formattedSpecialties,
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+
+      if (staffError) {
+        console.error('Supabase staff_profiles upsert error:', staffError.message);
+        if (isNewlyCreated) {
+          await supabaseAdmin.auth.admin.deleteUser(targetUid).catch(() => {});
+        }
+        res.status(500).json({ error: 'Failed to persist clinical staff profile in database', details: staffError.message });
+        return;
       }
 
       const staffProfile = {
@@ -438,8 +457,8 @@ const PORT = 3000;
         role,
         active: true,
         onboardingStatus: 'completed',
-        firstName: firstName || null,
-        lastName: lastName || null,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
         displayName,
         specialties: formattedSpecialties || [],
         createdAt: timestamp,
@@ -474,70 +493,69 @@ const PORT = 3000;
       const staffMap = new Map<string, any>();
 
       // 1. Fetch from canonical Supabase staff_profiles table
-      try {
-        const { data: sbStaff, error: sbStaffError } = await supabaseAdmin
-          .from('staff_profiles')
-          .select('*')
-          .order('created_at', { ascending: false });
+      const { data: sbStaff, error: sbStaffError } = await supabaseAdmin
+        .from('staff_profiles')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-        if (sbStaff && !sbStaffError) {
-          sbStaff.forEach((s: any) => {
-            staffMap.set(s.id, {
-              uid: s.id,
-              id: s.id,
-              email: s.email,
-              role: s.role,
-              active: s.active !== false,
-              onboardingStatus: s.onboarding_status || 'completed',
-              firstName: s.first_name,
-              lastName: s.last_name,
-              displayName: `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.email,
-              specialties: Array.isArray(s.specialties) ? s.specialties : [],
-              createdAt: s.created_at,
-              updatedAt: s.updated_at,
-            });
+      if (sbStaffError) {
+        console.error('Supabase staff_profiles query error:', sbStaffError);
+        return res.status(500).json({ error: `Failed to fetch staff directory: ${sbStaffError.message}` });
+      }
+
+      if (sbStaff) {
+        sbStaff.forEach((s: any) => {
+          staffMap.set(s.id, {
+            uid: s.id,
+            id: s.id,
+            email: s.email,
+            role: s.role,
+            active: s.active !== false,
+            onboardingStatus: s.onboarding_status || 'completed',
+            firstName: s.first_name,
+            lastName: s.last_name,
+            displayName: `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.email,
+            specialties: Array.isArray(s.specialties) ? s.specialties : [],
+            createdAt: s.created_at,
+            updatedAt: s.updated_at,
           });
-        }
-      } catch (sbErr) {
-        console.warn('Supabase staff_profiles query warning:', sbErr);
+        });
       }
 
       // 2. Fetch profiles with staff roles to ensure complete directory
-      try {
-        const { data: sbProfiles, error: sbError } = await supabaseAdmin
-          .from('profiles')
-          .select('*')
-          .in('role', ['doctor', 'pharmacist', 'admin']);
+      const { data: sbProfiles, error: sbError } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .in('role', ['doctor', 'pharmacist', 'admin']);
 
-        if (sbProfiles && !sbError) {
-          sbProfiles.forEach(p => {
-            if (!staffMap.has(p.id)) {
-              staffMap.set(p.id, {
-                uid: p.id,
-                id: p.id,
-                email: p.email,
-                role: p.role,
-                active: true,
-                onboardingStatus: 'completed',
-                firstName: p.first_name,
-                lastName: p.last_name,
-                displayName: p.display_name || `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email,
-                specialties: [],
-                createdAt: p.created_at,
-                updatedAt: p.updated_at,
-              });
-            }
-          });
-        }
-      } catch (sbErr) {
-        console.warn('Supabase staff list fetch warning:', sbErr);
+      if (sbError) {
+        console.warn('Supabase staff profiles lookup warning:', sbError);
+      } else if (sbProfiles) {
+        sbProfiles.forEach(p => {
+          if (!staffMap.has(p.id)) {
+            staffMap.set(p.id, {
+              uid: p.id,
+              id: p.id,
+              email: p.email,
+              role: p.role,
+              active: true,
+              onboardingStatus: 'completed',
+              firstName: p.first_name,
+              lastName: p.last_name,
+              displayName: p.display_name || `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email,
+              specialties: [],
+              createdAt: p.created_at,
+              updatedAt: p.updated_at,
+            });
+          }
+        });
       }
 
       const staffList = Array.from(staffMap.values());
       res.json({ success: true, staff: staffList });
     } catch (err: any) {
       console.error('Error fetching staff:', err);
-      res.json({ success: true, staff: [] });
+      res.status(500).json({ error: 'Internal server error while fetching staff directory', message: err.message });
     }
   });
 
@@ -557,13 +575,14 @@ const PORT = 3000;
       const timestamp = new Date().toISOString();
 
       // 1. Update canonical Supabase public.staff_profiles record
-      try {
-        await supabaseAdmin
-          .from('staff_profiles')
-          .update({ active, updated_at: timestamp })
-          .eq('id', uid);
-      } catch (sbErr: any) {
-        console.warn('Supabase staff_profiles status update warning:', sbErr.message);
+      const { error: sbUpdateErr } = await supabaseAdmin
+        .from('staff_profiles')
+        .update({ active, updated_at: timestamp })
+        .eq('id', uid);
+
+      if (sbUpdateErr) {
+        console.error('Supabase staff_profiles status update error:', sbUpdateErr.message);
+        return res.status(500).json({ error: 'Failed to update staff status in database', details: sbUpdateErr.message });
       }
 
       // 2. Audit log
@@ -742,9 +761,8 @@ const PORT = 3000;
         
         // Auto-create Message Thread
         try {
-          const { MessagingService } = await import('./src/server/messaging');
-          const messaging = new MessagingService();
-          await messaging.ensureThread(uid, assignedDoctorId, id);
+          const { messageRepository } = await import('./src/server/repositories/messageRepository');
+          await messageRepository.ensureThread(uid, assignedDoctorId, id);
         } catch (threadErr) {
           console.error('Error auto-creating message thread:', threadErr);
         }
@@ -1925,11 +1943,11 @@ const PORT = 3000;
   app.get('/api/notifications/preferences', requireAuth, async (req, res) => {
     try {
       const decodedToken = (req as any).user;
-      const { NotificationService } = await import('./src/server/notifications');
-      const notifService = new NotificationService();
-      const prefs = await notifService.getPreferences(decodedToken.uid);
-      res.json(prefs);
-    } catch (err) {
+      const { NotificationRepository } = await import('./src/server/repositories/notificationRepository');
+      const notifRepo = new NotificationRepository();
+      const prefs = await notifRepo.getPreferences(decodedToken.uid);
+      res.json({ email: prefs.email, sms: prefs.sms, inApp: prefs.in_app });
+    } catch (err: any) {
       console.warn('Error fetching notification preferences, using defaults:', err);
       res.json({ email: true, sms: false, inApp: true });
     }
@@ -1939,19 +1957,19 @@ const PORT = 3000;
     try {
       const decodedToken = (req as any).user;
       const { email, sms, inApp } = req.body;
-      const { NotificationService } = await import('./src/server/notifications');
-      const notifService = new NotificationService();
+      const { NotificationRepository } = await import('./src/server/repositories/notificationRepository');
+      const notifRepo = new NotificationRepository();
       
       const updates: any = {};
       if (typeof email === 'boolean') updates.email = email;
       if (typeof sms === 'boolean') updates.sms = sms;
-      if (typeof inApp === 'boolean') updates.inApp = inApp;
+      if (typeof inApp === 'boolean') updates.in_app = inApp;
 
-      await notifService.updatePreferences(decodedToken.uid, updates);
+      await notifRepo.updatePreferences(decodedToken.uid, updates);
       res.json({ success: true });
-    } catch (err) {
-      console.warn('Error updating notification preferences:', err);
-      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error updating notification preferences:', err);
+      res.status(500).json({ error: 'Failed to update notification preferences', message: err.message });
     }
   });
 
@@ -1959,21 +1977,26 @@ const PORT = 3000;
     try {
       const decodedToken = (req as any).user;
       const uid = decodedToken.uid;
+      const { NotificationRepository } = await import('./src/server/repositories/notificationRepository');
+      const notifRepo = new NotificationRepository();
       
-      try {
-        const snap = await db.collection('notifications')
-          .where('patientId', '==', uid)
-          .orderBy('createdAt', 'desc')
-          .limit(50)
-          .get();
-          
-        const notifications = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        return res.json(notifications);
-      } catch {
-        return res.json([]);
-      }
-    } catch {
-      res.json([]);
+      const notifications = await notifRepo.listForPatient(uid, 50);
+      res.json(notifications.map(n => ({
+        id: n.id,
+        patientId: n.patient_id,
+        type: n.type,
+        title: n.title,
+        message: n.short_message,
+        shortMessage: n.short_message,
+        status: n.status,
+        relatedEntityId: n.related_entity_id,
+        relatedEntityType: n.related_entity_type,
+        createdAt: n.created_at,
+        readAt: (n as any).read_at,
+      })));
+    } catch (err: any) {
+      console.error('Error fetching notifications:', err);
+      res.status(500).json({ error: 'Failed to fetch notifications', message: err.message });
     }
   });
 
@@ -1982,24 +2005,14 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
       const uid = decodedToken.uid;
+      const { NotificationRepository } = await import('./src/server/repositories/notificationRepository');
+      const notifRepo = new NotificationRepository();
 
-      try {
-        const notifRef = db.collection('notifications').doc(id);
-        const notifSnap = await notifRef.get();
-
-        if (notifSnap.exists && notifSnap.data()?.patientId === uid) {
-          await notifRef.update({
-            status: 'read',
-            readAt: new Date().toISOString()
-          });
-        }
-      } catch {
-        // Silent fallback
-      }
-
+      await notifRepo.markRead(id, uid);
       res.json({ success: true });
-    } catch {
-      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error marking notification read:', err);
+      res.status(500).json({ error: 'Failed to mark notification as read', message: err.message });
     }
   });
 
@@ -2007,34 +2020,14 @@ const PORT = 3000;
     try {
       const decodedToken = (req as any).user;
       const uid = decodedToken.uid;
+      const { NotificationRepository } = await import('./src/server/repositories/notificationRepository');
+      const notifRepo = new NotificationRepository();
 
-      try {
-        const unreadSnap = await db.collection('notifications')
-          .where('patientId', '==', uid)
-          .where('status', '==', 'unread')
-          .get();
-
-        if (!unreadSnap.empty) {
-          const batch = db.batch();
-          const timestamp = new Date().toISOString();
-
-          unreadSnap.docs.forEach(doc => {
-            batch.update(doc.ref, {
-              status: 'read',
-              readAt: timestamp
-            });
-          });
-
-          await batch.commit();
-          return res.json({ success: true, count: unreadSnap.size });
-        }
-      } catch {
-        // Silent fallback
-      }
-
-      res.json({ success: true, count: 0 });
-    } catch {
-      res.json({ success: true, count: 0 });
+      await notifRepo.markAllRead(uid);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error marking all notifications read:', err);
+      res.status(500).json({ error: 'Failed to mark all notifications as read', message: err.message });
     }
   });
 
@@ -2147,7 +2140,7 @@ const PORT = 3000;
           city: shippingAddress.city || '',
           state: shippingAddress.state || '',
           postalCode: shippingAddress.postalCode || shippingAddress.zip || '',
-          country: shippingAddress.country || 'United States',
+          country: shippingAddress.country || 'India',
           phoneNumber: shippingAddress.phoneNumber || rawPhone || '',
         };
       }
@@ -2230,23 +2223,25 @@ const PORT = 3000;
         updatedProfile = inserted;
       }
 
-      // Also mirror to Firestore if db is active (graceful fallback)
-      try {
-        const firestoreUpdates: Record<string, any> = {
-          updatedAt: new Date().toISOString(),
-        };
-        if (firstName !== undefined) firestoreUpdates.firstName = typeof firstName === 'string' ? firstName.trim() : firstName;
-        if (lastName !== undefined) firestoreUpdates.lastName = typeof lastName === 'string' ? lastName.trim() : lastName;
-        if (dateOfBirth !== undefined) firestoreUpdates.dateOfBirth = dateOfBirth;
-        if (sex !== undefined) firestoreUpdates.sex = sex;
-        if (phone !== undefined || phoneNumber !== undefined) firestoreUpdates.phone = rawPhone;
-        if (shippingAddress !== undefined && typeof shippingAddress === 'object') {
-          firestoreUpdates.shippingAddress = supabaseUpdates.shipping_address;
-        }
+      // Legacy Firebase mirroring (only for legacy Firebase-authenticated sessions)
+      if (decodedToken.authProvider === 'firebase') {
+        try {
+          const firestoreUpdates: Record<string, any> = {
+            updatedAt: new Date().toISOString(),
+          };
+          if (firstName !== undefined) firestoreUpdates.firstName = typeof firstName === 'string' ? firstName.trim() : firstName;
+          if (lastName !== undefined) firestoreUpdates.lastName = typeof lastName === 'string' ? lastName.trim() : lastName;
+          if (dateOfBirth !== undefined) firestoreUpdates.dateOfBirth = dateOfBirth;
+          if (sex !== undefined) firestoreUpdates.sex = sex;
+          if (phone !== undefined || phoneNumber !== undefined) firestoreUpdates.phone = rawPhone;
+          if (shippingAddress !== undefined && typeof shippingAddress === 'object') {
+            firestoreUpdates.shippingAddress = supabaseUpdates.shipping_address;
+          }
 
-        await db.collection('users').doc(uid).set(firestoreUpdates, { merge: true });
-      } catch (fbErr) {
-        // Firestore is optional / secondary
+          await db.collection('users').doc(uid).set(firestoreUpdates, { merge: true });
+        } catch (fbErr) {
+          // Firestore is optional / secondary
+        }
       }
 
       // Record audit log entry in Supabase repository
@@ -2263,23 +2258,24 @@ const PORT = 3000;
         console.warn('[AuditLog] Warning recording profile audit log:', auditErr);
       }
 
+      const p = updatedProfile || {};
       res.json({
         success: true,
         profile: {
-          id: updatedProfile.id,
-          uid: updatedProfile.id,
-          email: updatedProfile.email,
-          displayName: updatedProfile.display_name,
-          firstName: updatedProfile.first_name,
-          lastName: updatedProfile.last_name,
-          dateOfBirth: updatedProfile.date_of_birth,
-          sex: updatedProfile.sex,
-          phone: updatedProfile.phone_number,
-          phoneNumber: updatedProfile.phone_number,
-          shippingAddress: updatedProfile.shipping_address,
-          role: updatedProfile.role,
-          createdAt: updatedProfile.created_at,
-          updatedAt: updatedProfile.updated_at,
+          id: p.id || uid,
+          uid: p.id || uid,
+          email: p.email || decodedToken.email || null,
+          displayName: p.display_name || null,
+          firstName: p.first_name || null,
+          lastName: p.last_name || null,
+          dateOfBirth: p.date_of_birth || null,
+          sex: p.sex || null,
+          phone: p.phone_number || null,
+          phoneNumber: p.phone_number || null,
+          shippingAddress: p.shipping_address || null,
+          role: p.role || decodedToken.role || 'patient',
+          createdAt: p.created_at || new Date().toISOString(),
+          updatedAt: p.updated_at || new Date().toISOString(),
         },
       });
     } catch (err: any) {
@@ -2382,55 +2378,34 @@ const PORT = 3000;
     try {
       const decodedToken = (req as any).user;
       const uid = decodedToken.uid;
-      const subsList: any[] = [];
 
-      // 1. Fetch from Supabase
-      try {
-        const { data: sbSubs, error: sbErr } = await supabaseAdmin
-          .from('subscriptions')
-          .select('*')
-          .eq('patient_id', uid)
-          .order('created_at', { ascending: false });
+      const { data: sbSubs, error: sbErr } = await supabaseAdmin
+        .from('subscriptions')
+        .select('*')
+        .eq('patient_id', uid)
+        .order('created_at', { ascending: false });
 
-        if (sbSubs && !sbErr) {
-          sbSubs.forEach(s => {
-            subsList.push({
-              id: s.id,
-              subscriptionId: s.provider_subscription_id || s.id,
-              patientId: s.patient_id,
-              treatmentName: s.treatment_category || s.treatment_name || 'Treatment Subscription',
-              status: s.status,
-              billingInterval: s.billing_interval || 'month',
-              intervalCount: s.interval_count || 1,
-              nextBillingAt: s.next_billing_at,
-              createdAt: s.created_at,
-            });
-          });
-        }
-      } catch (err) {
-        console.warn('Supabase subscriptions fetch warning:', err);
+      if (sbErr) {
+        console.error('Supabase subscriptions query error:', sbErr);
+        return res.status(500).json({ error: `Failed to fetch subscriptions: ${sbErr.message}` });
       }
 
-      // 2. Fetch from Firestore if available
-      try {
-        const snap = await db.collection('subscriptions')
-          .where('patientId', '==', uid)
-          .orderBy('createdAt', 'desc')
-          .get();
-        snap.docs.forEach(d => {
-          const data = d.data();
-          if (!subsList.some(s => s.subscriptionId === (data.subscriptionId || d.id))) {
-            subsList.push({ subscriptionId: d.id, ...data });
-          }
-        });
-      } catch (fbErr) {
-        // Firestore fallback
-      }
+      const subsList = (sbSubs || []).map(s => ({
+        id: s.id,
+        subscriptionId: s.provider_subscription_id || s.id,
+        patientId: s.patient_id,
+        treatmentName: s.treatment_category || s.treatment_name || 'Treatment Subscription',
+        status: s.status,
+        billingInterval: s.billing_interval || 'month',
+        intervalCount: s.interval_count || 1,
+        nextBillingAt: s.next_billing_at,
+        createdAt: s.created_at,
+      }));
 
       res.json(subsList);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching subscriptions:', error);
-      res.json([]);
+      res.status(500).json({ error: 'Failed to fetch subscriptions', message: error.message });
     }
   });
 
@@ -2640,14 +2615,17 @@ const PORT = 3000;
       const decodedToken = (req as any).user;
       const role = decodedToken.role === 'doctor' ? 'doctor' : 'patient';
       
-      const { MessagingService } = await import('./src/server/messaging');
-      const messaging = new MessagingService();
-      
-      const result = await messaging.sendMessage(threadId, decodedToken.uid, role, text);
+      const { messageRepository } = await import('./src/server/repositories/messageRepository');
+      const result = await messageRepository.addMessage({
+        threadId,
+        senderUid: decodedToken.uid,
+        senderRole: role,
+        text,
+      });
       res.json({ success: true, ...result });
     } catch (err: any) {
       console.error('Error sending message:', err);
-      res.status(err.message === 'Forbidden' ? 403 : 400).json({ error: err.message || 'Internal Error' });
+      res.status(err.message?.includes('Forbidden') ? 403 : 400).json({ error: err.message || 'Internal Error' });
     }
   });
 
@@ -2657,14 +2635,12 @@ const PORT = 3000;
       const decodedToken = (req as any).user;
       const role = decodedToken.role === 'doctor' ? 'doctor' : 'patient';
       
-      const { MessagingService } = await import('./src/server/messaging');
-      const messaging = new MessagingService();
-      
-      await messaging.markAsRead(threadId, decodedToken.uid, role);
+      const { messageRepository } = await import('./src/server/repositories/messageRepository');
+      await messageRepository.markAsRead(threadId, decodedToken.uid, role);
       res.json({ success: true });
     } catch (err: any) {
       console.error('Error marking read:', err);
-      res.status(500).json({ error: 'Internal Error' });
+      res.status(err.message?.includes('Forbidden') ? 403 : 500).json({ error: err.message || 'Internal Error' });
     }
   });
 

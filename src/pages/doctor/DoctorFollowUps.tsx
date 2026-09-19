@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { MOCK_FOLLOW_UPS, FollowUpTask } from '../../data/doctorMockData';
+import { supabase } from '../../lib/supabase';
 import { SectionHeader } from '../../components/doctor/common/SectionHeader';
 import { StatusBadge } from '../../components/doctor/common/StatusBadge';
 import { PriorityIndicator } from '../../components/doctor/common/PriorityIndicator';
@@ -14,13 +14,75 @@ import {
   Search,
   CheckSquare,
   Sparkles,
+  Loader2,
 } from 'lucide-react';
 
+export interface FollowUpTask {
+  id: string;
+  consultationId?: string;
+  patientId: string;
+  patientName: string;
+  patientMrn: string;
+  category: string;
+  reason: string;
+  dueDate: string;
+  dueStatus: 'overdue' | 'today' | 'upcoming';
+  priority: 'normal' | 'urgent';
+}
+
 export default function DoctorFollowUps() {
-  const [tasks, setTasks] = useState<FollowUpTask[]>(MOCK_FOLLOW_UPS);
+  const [tasks, setTasks] = useState<FollowUpTask[]>([]);
+  const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | 'today' | 'upcoming'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const fetchLiveFollowUps = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+
+        const res = await fetch('/api/clinical/doctor/consultations', {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const consults: any[] = data.consultations || [];
+          
+          const derivedTasks: FollowUpTask[] = consults
+            .filter((c) => c.status === 'completed' || c.status === 'under_review')
+            .map((c) => {
+              const responses = c.responses || {};
+              const isApproved = c.status === 'completed';
+              return {
+                id: `fu-${c.id}`,
+                consultationId: c.id,
+                patientId: c.patient_id,
+                patientName: responses.fullName || 'Patient Intake',
+                patientMrn: `MRN-${c.id.slice(0, 6).toUpperCase()}`,
+                category: c.primary_concern === 'weight' ? 'GLP-1 Titration' : 'Care Review',
+                reason: isApproved
+                  ? 'Week 4 GLP-1 Titration Check-in & GI Symptom Assessment'
+                  : 'Pending Intake Review & Clinical Assessment',
+                dueDate: isApproved ? '4 weeks from approval' : 'Today',
+                dueStatus: isApproved ? 'upcoming' : 'today',
+                priority: c.triage_priority === 'urgent' ? 'urgent' : 'normal',
+              };
+            });
+
+          setTasks(derivedTasks);
+        }
+      } catch (err) {
+        console.warn('Error fetching live follow-ups:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchLiveFollowUps();
+  }, []);
 
   const filteredTasks = tasks.filter((t) => {
     const matchesSearch =
@@ -44,7 +106,7 @@ export default function DoctorFollowUps() {
         tagline="Clinical Task Manager"
         title="Follow-up Worklist"
         subtitle="Manage scheduled dosage titrations, recurring metabolic lab reviews, and proactive patient check-ins."
-        badge={`${tasks.length - completedTaskIds.length} Pending`}
+        badge={`${tasks.length - completedTaskIds.length} Active`}
       />
 
       {/* 2. Filters */}
@@ -85,7 +147,12 @@ export default function DoctorFollowUps() {
 
       {/* 3. Task List Table / Cards */}
       <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-2xs divide-y divide-stone-100">
-        {filteredTasks.length === 0 ? (
+        {loading ? (
+          <div className="p-12 flex justify-center items-center gap-2 text-xs text-stone-400">
+            <Loader2 className="w-4 h-4 animate-spin text-stone-400" />
+            <span>Loading follow-up tasks...</span>
+          </div>
+        ) : filteredTasks.length === 0 ? (
           <div className="p-12 text-center text-xs text-stone-400">
             No clinical follow-ups match your current filter.
           </div>
@@ -138,17 +205,14 @@ export default function DoctorFollowUps() {
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-stone-100">
-                  <Link
-                    to={
-                      task.relatedConsultationId
-                        ? `/doctor/consultations/${task.relatedConsultationId}`
-                        : `/doctor/patients/${task.patientId}`
-                    }
-                    className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-white text-xs font-semibold transition-colors shadow-2xs"
-                  >
-                    <span>{task.nextAction}</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+                  {task.consultationId && (
+                    <Link
+                      to={`/doctor/consultations/${task.consultationId}`}
+                      className="px-3.5 py-1.5 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-medium transition-colors"
+                    >
+                      Open Consultation
+                    </Link>
+                  )}
                 </div>
               </div>
             );

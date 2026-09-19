@@ -1,6 +1,6 @@
 import React, { useState, useEffect, FormEvent } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { useDoctorAuth, DEMO_DOCTOR_CREDENTIALS } from '../../context/DoctorAuthContext';
+import { useDoctorAuth } from '../../context/DoctorAuthContext';
 import {
   ShieldCheck,
   Lock,
@@ -10,7 +10,6 @@ import {
   AlertCircle,
   Loader2,
   Stethoscope,
-  KeyRound,
   ArrowRight,
   Info,
 } from 'lucide-react';
@@ -54,12 +53,6 @@ export default function DoctorLogin() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickFill = () => {
-    setEmail(DEMO_DOCTOR_CREDENTIALS.email);
-    setPassword(DEMO_DOCTOR_CREDENTIALS.password);
-    setErrorMessage(null);
   };
 
   return (
@@ -179,7 +172,7 @@ export default function DoctorLogin() {
                     autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="doctor.demo@sugahealth.test"
+                    placeholder="provider@sugahealth.com"
                     className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-xs text-stone-900 placeholder:text-stone-400 focus:bg-white focus:outline-hidden focus:border-stone-500 transition-all font-sans"
                   />
                 </div>
@@ -259,29 +252,6 @@ export default function DoctorLogin() {
                 )}
               </button>
             </form>
-
-            {/* Demo Quick-Fill Helper */}
-            <div className="mt-6 pt-5 border-t border-stone-100">
-              <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/80 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-2xs font-semibold uppercase tracking-wider text-stone-500 flex items-center gap-1">
-                    <KeyRound className="w-3 h-3 text-emerald-700" />
-                    Demo Provider Credentials
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleQuickFill}
-                    className="text-2xs font-semibold text-emerald-800 hover:text-emerald-950 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 transition-colors cursor-pointer"
-                  >
-                    Auto-Fill
-                  </button>
-                </div>
-                <div className="font-mono text-2xs text-stone-600 space-y-0.5">
-                  <div>Email: <span className="text-stone-900 font-semibold">{DEMO_DOCTOR_CREDENTIALS.email}</span></div>
-                  <div>Pass: <span className="text-stone-900 font-semibold">{DEMO_DOCTOR_CREDENTIALS.password}</span></div>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </main>
@@ -295,7 +265,7 @@ export default function DoctorLogin() {
               <h3 className="text-base font-semibold text-stone-900">Credential Recovery</h3>
             </div>
             <p className="text-xs text-stone-600 leading-relaxed">
-              Provider credential resets require dual-factor administrative verification through the Suga.Health Medical Credentialing Board. Please use the test credentials provided in the demo helper.
+              Provider credential resets require dual-factor administrative verification through the Suga.Health Medical Credentialing Board. Please contact your clinical administrator or support@sugahealth.com for assistance.
             </p>
             <button
               onClick={() => setShowForgotPasswordModal(false)}

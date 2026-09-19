@@ -140,7 +140,7 @@ FROM public.staff_profiles sp
 JOIN public.profiles p ON p.id = sp.id
 WHERE sp.role = 'doctor'
   AND sp.active = true
-  AND sp.onboarding_status = 'approved';
+  AND sp.onboarding_status = 'completed';
 
 GRANT SELECT ON public.v_doctor_directory TO authenticated;
 

@@ -1,10 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  MOCK_MESSAGE_THREADS,
-  MessageThread,
-  MessageItem,
-} from '../../data/doctorMockData';
+import { useDoctorAuth } from '../../context/DoctorAuthContext';
+import { supabase } from '../../lib/supabase';
 import { SectionHeader } from '../../components/doctor/common/SectionHeader';
 import { StatusBadge } from '../../components/doctor/common/StatusBadge';
 import { PriorityIndicator } from '../../components/doctor/common/PriorityIndicator';
@@ -19,54 +16,181 @@ import {
   ExternalLink,
   ShieldCheck,
   Sparkles,
+  Loader2,
 } from 'lucide-react';
 
+export interface DoctorThreadItem {
+  id: string;
+  consultationId?: string;
+  patientId: string;
+  doctorId: string;
+  patientName: string;
+  patientMrn: string;
+  subject: string;
+  status: 'needs_reply' | 'waiting' | 'resolved' | 'open' | 'closed';
+  unread: boolean;
+  patientUnreadCount?: number;
+  doctorUnreadCount?: number;
+  lastMessageSnippet: string;
+  lastMessageTime: string;
+  lastMessageAt?: string;
+  priority: 'normal' | 'urgent';
+}
+
+export interface DoctorMessageItem {
+  id: string;
+  threadId: string;
+  sender: 'doctor' | 'patient';
+  senderUid: string;
+  senderName: string;
+  text: string;
+  createdAt: string;
+  timeFormatted: string;
+}
+
 export default function DoctorMessages() {
-  const [threads, setThreads] = useState<MessageThread[]>(MOCK_MESSAGE_THREADS);
-  const [selectedThreadId, setSelectedThreadId] = useState<string>(threads[0]?.id || '');
+  const { doctor } = useDoctorAuth();
+  const [threads, setThreads] = useState<DoctorThreadItem[]>([]);
+  const [loadingThreads, setLoadingThreads] = useState(true);
+  const [selectedThreadId, setSelectedThreadId] = useState<string>('');
+  const [messages, setMessages] = useState<DoctorMessageItem[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [tabFilter, setTabFilter] = useState<'all' | 'needs_reply' | 'waiting' | 'resolved'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [composerText, setComposerText] = useState('');
+  const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchThreads = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const res = await fetch('/api/messages/threads', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const loadedThreads = data.threads || [];
+        setThreads(loadedThreads);
+        if (loadedThreads.length > 0 && !selectedThreadId) {
+          setSelectedThreadId(loadedThreads[0].id);
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching doctor threads:', err);
+    } finally {
+      setLoadingThreads(false);
+    }
+  };
+
+  const fetchMessages = async (threadId: string) => {
+    if (!threadId) return;
+    setLoadingMessages(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const res = await fetch(`/api/messages/threads/${threadId}/messages`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data.messages || []);
+
+        // Mark thread as read
+        fetch(`/api/messages/threads/${threadId}/read`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('Error fetching thread messages:', err);
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchThreads();
+
+    const channel = supabase
+      .channel('doctor-messages-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'messages' },
+        () => {
+          fetchThreads();
+          if (selectedThreadId) {
+            fetchMessages(selectedThreadId);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'message_threads' },
+        () => {
+          fetchThreads();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (selectedThreadId) {
+      fetchMessages(selectedThreadId);
+    }
+  }, [selectedThreadId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const activeThread = threads.find((t) => t.id === selectedThreadId) || threads[0];
 
   const filteredThreads = threads.filter((t) => {
     const matchesSearch =
-      t.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.patientMrn.toLowerCase().includes(searchQuery.toLowerCase());
+      (t.patientName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (t.subject || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (t.patientMrn || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesTab = tabFilter === 'all' || t.status === tabFilter;
     return matchesSearch && matchesTab;
   });
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!composerText.trim() || !activeThread) return;
+    if (!composerText.trim() || !activeThread || sending) return;
 
-    const newMsg: MessageItem = {
-      id: `m-${Date.now()}`,
-      sender: 'doctor',
-      senderName: 'Dr. Sarah Mitchell, MD',
-      text: composerText.trim(),
-      timestamp: new Date().toISOString(),
-      timeFormatted: 'Just now',
-    };
+    setSending(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
 
-    setThreads((prev) =>
-      prev.map((t) =>
-        t.id === activeThread.id
-          ? {
-              ...t,
-              status: 'waiting',
-              unread: false,
-              lastMessageTime: 'Just now',
-              lastMessageSnippet: composerText.trim(),
-              messages: [...t.messages, newMsg],
-            }
-          : t
-      )
-    );
-    setComposerText('');
+      const res = await fetch(`/api/messages/threads/${activeThread.id}/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ text: composerText.trim() }),
+      });
+
+      if (res.ok) {
+        setComposerText('');
+        await fetchMessages(activeThread.id);
+        await fetchThreads();
+      }
+    } catch (err) {
+      console.warn('Error sending doctor message:', err);
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleInsertTemplate = (text: string) => {
@@ -80,7 +204,7 @@ export default function DoctorMessages() {
         tagline="Provider Communication"
         title="Clinical Messages"
         subtitle="Asynchronous provider-patient messaging for symptom check-ins, lab clarifications, and dosage guidance."
-        badge={`${threads.filter((t) => t.unread).length} Unread`}
+        badge={`${threads.filter((t) => t.unread || (t.doctorUnreadCount && t.doctorUnreadCount > 0)).length} Unread`}
       />
 
       {/* 2. Main Inbox Workspace (Split 2 Columns) */}
@@ -124,42 +248,53 @@ export default function DoctorMessages() {
 
           {/* Conversation List */}
           <div className="flex-1 overflow-y-auto divide-y divide-stone-100">
-            {filteredThreads.map((thread) => {
-              const isSelected = thread.id === activeThread?.id;
-              return (
-                <button
-                  key={thread.id}
-                  onClick={() => setSelectedThreadId(thread.id)}
-                  className={`w-full text-left p-3.5 transition-colors block ${
-                    isSelected ? 'bg-stone-100/80 border-l-2 border-stone-900' : 'hover:bg-stone-50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-1 mb-1">
-                    <span className="font-semibold text-xs text-stone-900 flex items-center gap-1.5">
-                      {thread.unread && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
+            {loadingThreads ? (
+              <div className="p-8 flex justify-center items-center gap-2 text-xs text-stone-400">
+                <Loader2 className="w-4 h-4 animate-spin text-stone-400" />
+                <span>Loading conversations...</span>
+              </div>
+            ) : filteredThreads.length === 0 ? (
+              <div className="p-8 text-center text-xs text-stone-400">
+                No conversations found.
+              </div>
+            ) : (
+              filteredThreads.map((thread) => {
+                const isSelected = thread.id === activeThread?.id;
+                return (
+                  <button
+                    key={thread.id}
+                    onClick={() => setSelectedThreadId(thread.id)}
+                    className={`w-full text-left p-3.5 transition-colors block ${
+                      isSelected ? 'bg-stone-100/80 border-l-2 border-stone-900' : 'hover:bg-stone-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="font-semibold text-xs text-stone-900 flex items-center gap-1.5">
+                        {(thread.unread || (thread.doctorUnreadCount && thread.doctorUnreadCount > 0)) && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
+                        )}
+                        {thread.patientName}
+                      </span>
+                      <span className="text-3xs text-stone-400">{thread.lastMessageTime}</span>
+                    </div>
+
+                    <p className="text-2xs font-medium text-stone-800 line-clamp-1">
+                      {thread.subject}
+                    </p>
+                    <p className="text-2xs text-stone-500 line-clamp-1 mt-0.5">
+                      {thread.lastMessageSnippet}
+                    </p>
+
+                    <div className="flex items-center gap-2 mt-2">
+                      <StatusBadge status={thread.status} size="sm" />
+                      {thread.priority === 'urgent' && (
+                        <PriorityIndicator priority="urgent" size="sm" />
                       )}
-                      {thread.patientName}
-                    </span>
-                    <span className="text-3xs text-stone-400">{thread.lastMessageTime}</span>
-                  </div>
-
-                  <p className="text-2xs font-medium text-stone-800 line-clamp-1">
-                    {thread.subject}
-                  </p>
-                  <p className="text-2xs text-stone-500 line-clamp-1 mt-0.5">
-                    {thread.lastMessageSnippet}
-                  </p>
-
-                  <div className="flex items-center gap-2 mt-2">
-                    <StatusBadge status={thread.status} size="sm" />
-                    {thread.priority === 'urgent' && (
-                      <PriorityIndicator priority="urgent" size="sm" />
-                    )}
-                  </div>
-                </button>
-              );
-            })}
+                    </div>
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -174,48 +309,64 @@ export default function DoctorMessages() {
                     <span className="font-semibold text-sm text-stone-900 font-sans">
                       {activeThread.patientName}
                     </span>
-                    <span className="font-mono text-2xs text-stone-500">{activeThread.patientMrn}</span>
+                    {activeThread.patientMrn && (
+                      <span className="font-mono text-2xs text-stone-500">{activeThread.patientMrn}</span>
+                    )}
                   </div>
                   <p className="text-xs text-stone-600 font-medium">{activeThread.subject}</p>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <Link
-                    to={`/doctor/patients/${activeThread.patientId}`}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 text-2xs font-medium transition-colors"
-                  >
-                    <span>Patient Chart</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </Link>
+                  {activeThread.patientId && (
+                    <Link
+                      to={`/doctor/patients/${activeThread.patientId}`}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 text-2xs font-medium transition-colors"
+                    >
+                      <span>Patient Chart</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </Link>
+                  )}
                 </div>
               </div>
 
               {/* Message Bubbles History */}
               <div className="flex-1 p-4 overflow-y-auto space-y-4 max-h-[380px]">
-                {activeThread.messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col ${
-                      msg.sender === 'doctor' ? 'items-end' : 'items-start'
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5 text-3xs text-stone-400 mb-1">
-                      <span>{msg.senderName}</span>
-                      <span>•</span>
-                      <span>{msg.timeFormatted}</span>
-                    </div>
-
+                {loadingMessages ? (
+                  <div className="p-8 flex justify-center items-center gap-2 text-xs text-stone-400">
+                    <Loader2 className="w-4 h-4 animate-spin text-stone-400" />
+                    <span>Loading messages...</span>
+                  </div>
+                ) : messages.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-stone-400">
+                    No messages in this consultation yet.
+                  </div>
+                ) : (
+                  messages.map((msg) => (
                     <div
-                      className={`max-w-md p-3.5 rounded-xl text-xs ${
-                        msg.sender === 'doctor'
-                          ? 'bg-stone-900 text-white shadow-2xs'
-                          : 'bg-white border border-stone-200 text-stone-900 shadow-2xs'
+                      key={msg.id}
+                      className={`flex flex-col ${
+                        msg.sender === 'doctor' ? 'items-end' : 'items-start'
                       }`}
                     >
-                      <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                      <div className="flex items-center gap-1.5 text-3xs text-stone-400 mb-1">
+                        <span>{msg.sender === 'doctor' ? (doctor?.name || 'Attending Physician') : (activeThread.patientName || 'Patient')}</span>
+                        <span>•</span>
+                        <span>{msg.timeFormatted || new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+
+                      <div
+                        className={`max-w-md p-3.5 rounded-xl text-xs ${
+                          msg.sender === 'doctor'
+                            ? 'bg-stone-900 text-white shadow-2xs'
+                            : 'bg-white border border-stone-200 text-stone-900 shadow-2xs'
+                        }`}
+                      >
+                        <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Clinical Quick Templates & Composer */}
@@ -225,8 +376,8 @@ export default function DoctorMessages() {
                   <span className="text-3xs uppercase font-semibold text-stone-400">Templates:</span>
                   {[
                     'Hydration Protocol (64oz water daily with electrolytes)',
-                    'Mild Nausea Advisory (Take injection at bedtime)',
-                    'Lab Confirmation received & verified',
+                    'Mild Nausea Advisory (Take dose at bedtime with food)',
+                    'Clinical review verified and acknowledged',
                   ].map((tpl, i) => (
                     <button
                       key={i}
@@ -251,14 +402,14 @@ export default function DoctorMessages() {
 
                   <div className="flex items-center justify-between">
                     <span className="text-3xs text-stone-400 font-mono">
-                      Attending: Dr. Sarah Mitchell, MD
+                      Attending: {doctor?.name || 'Attending Physician'}
                     </span>
                     <button
                       type="submit"
-                      disabled={!composerText.trim()}
+                      disabled={!composerText.trim() || sending}
                       className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-stone-900 text-white text-xs font-semibold hover:bg-stone-800 disabled:opacity-50 transition-colors shadow-2xs"
                     >
-                      <Send className="w-3.5 h-3.5" />
+                      {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                       <span>Send Response</span>
                     </button>
                   </div>

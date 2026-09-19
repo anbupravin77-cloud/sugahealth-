@@ -64,6 +64,21 @@ router.post('/consultations/:id/submit', requireAuth, async (req: Request, res: 
 });
 
 /**
+ * GET /api/clinical/consultations/patient
+ * Retrieve all consultations for the authenticated patient.
+ */
+router.get('/consultations/patient', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const consultations = await clinicalWorkflowService.listPatientConsultations(user.uid);
+    res.json({ consultations });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error fetching patient consultations:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to retrieve patient consultations' });
+  }
+});
+
+/**
  * GET /api/clinical/consultations/:id
  * Retrieve full consultation details (patient or doctor view).
  */
@@ -89,14 +104,16 @@ router.post('/consultations/:id/select-option', requireAuth, async (req: Request
   try {
     const user = (req as any).user;
     const { id } = req.params;
-    const { selectedOption } = req.body;
+    const { prescriptionItemId } = req.body;
 
-    if (!selectedOption || !selectedOption.id) {
-      res.status(400).json({ error: 'Valid medication option is required' });
+    if (!prescriptionItemId || typeof prescriptionItemId !== 'string' || !prescriptionItemId.trim()) {
+      res.status(400).json({ error: 'Valid prescriptionItemId is required for medication selection.' });
       return;
     }
 
-    const result = await clinicalWorkflowService.selectMedicationOption(id, user.uid, selectedOption);
+    const result = await clinicalWorkflowService.selectMedicationOption(id, user.uid, {
+      prescriptionItemId: prescriptionItemId.trim(),
+    });
     res.json(result);
   } catch (err: any) {
     console.error('[ClinicalRoutes] Error selecting option:', err.message);
@@ -107,6 +124,36 @@ router.post('/consultations/:id/select-option', requireAuth, async (req: Request
 // ============================================================================
 // DOCTOR CLINICAL WORKSPACE ENDPOINTS
 // ============================================================================
+
+/**
+ * GET /api/clinical/doctor/patients/:patientId
+ * Retrieve canonical patient record / consultation details for a patient assigned to the authenticated doctor.
+ */
+router.get('/doctor/patients/:patientId', requireDoctorAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { patientId } = req.params;
+
+    // List doctor's consultations and filter by patient_id
+    const consultations = await clinicalWorkflowService.listDoctorConsultations(user.uid, 'all');
+    const matching = consultations.filter((c: any) => c.patient_id === patientId || c.id === patientId);
+
+    if (matching.length === 0) {
+      res.status(404).json({ error: 'No consultation record found for this patient assigned to you.' });
+      return;
+    }
+
+    matching.sort((a: any, b: any) => new Date(b.created_at || b.submitted_at || 0).getTime() - new Date(a.created_at || a.submitted_at || 0).getTime());
+    const targetConsultationId = matching[0].id;
+
+    const details = await clinicalWorkflowService.getConsultationDetails(targetConsultationId, user);
+    res.json(details);
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error fetching doctor patient record:', err.message);
+    const status = err.message?.includes('Forbidden') ? 403 : 404;
+    res.status(status).json({ error: err.message || 'Patient record not found' });
+  }
+});
 
 /**
  * GET /api/clinical/doctor/consultations
@@ -122,6 +169,38 @@ router.get('/doctor/consultations', requireDoctorAuth, async (req: Request, res:
   } catch (err: any) {
     console.error('[ClinicalRoutes] Error listing doctor consultations:', err.message);
     res.status(500).json({ error: err.message || 'Failed to list consultations' });
+  }
+});
+
+/**
+ * GET /api/clinical/doctor/prescriptions
+ * Retrieve prescriptions authored by authenticated doctor.
+ */
+router.get('/doctor/prescriptions', requireDoctorAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const prescriptions = await clinicalWorkflowService.getDoctorPrescriptions(user.uid);
+    res.json({ prescriptions });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error listing doctor prescriptions:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to list doctor prescriptions' });
+  }
+});
+
+/**
+ * POST /api/clinical/consultations/:id/claim
+ * Doctor explicitly claims an unassigned consultation for clinical review.
+ */
+router.post('/consultations/:id/claim', requireDoctorAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { id } = req.params;
+
+    const result = await clinicalWorkflowService.claimConsultation(id, user.uid);
+    res.json(result);
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error claiming consultation:', err.message);
+    res.status(400).json({ error: err.message || 'Failed to claim consultation' });
   }
 });
 
@@ -215,7 +294,7 @@ router.post('/consultations/:id/approve', requireDoctorAuth, async (req: Request
 router.get('/notifications', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const notifications = await clinicalWorkflowService.getUserNotifications(user.uid);
+    const notifications = await clinicalWorkflowService.getUserNotifications(user.uid, user.role);
     res.json({ notifications });
   } catch (err: any) {
     console.error('[ClinicalRoutes] Error fetching notifications:', err.message);
@@ -236,7 +315,174 @@ router.patch('/notifications/:id/read', requireAuth, async (req: Request, res: R
     res.json({ success });
   } catch (err: any) {
     console.error('[ClinicalRoutes] Error marking notification read:', err.message);
-    res.status(500).json({ error: err.message || 'Failed to mark notification read' });
+    const status = err.message?.includes('Forbidden') ? 403 : 500;
+    res.status(status).json({ error: err.message || 'Failed to mark notification read' });
+  }
+});
+
+/**
+ * PATCH /api/clinical/notifications/read-all
+ * Mark all notifications as read for the user.
+ */
+router.patch('/notifications/read-all', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const success = await clinicalWorkflowService.markAllNotificationsRead(user.uid);
+    res.json({ success });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error marking all notifications read:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to mark all notifications read' });
+  }
+});
+
+/**
+ * POST /api/clinical/notifications/read-all
+ * Mark all notifications as read for the user.
+ */
+router.post('/notifications/read-all', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const success = await clinicalWorkflowService.markAllNotificationsRead(user.uid);
+    res.json({ success });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error marking all notifications read:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to mark all notifications read' });
+  }
+});
+
+// ============================================================================
+// CANONICAL SUPABASE MESSAGING API
+// ============================================================================
+
+/**
+ * GET /api/messages/threads
+ * List conversation threads for authenticated user (doctor or patient) from Supabase.
+ */
+router.get('/messages/threads', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const threads = await clinicalWorkflowService.listUserThreads(user.uid, user.role);
+    res.json({ threads });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error fetching threads:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to list message threads' });
+  }
+});
+
+/**
+ * GET /api/messages/threads/:threadId/messages
+ * List messages in a thread from Supabase.
+ */
+router.get('/messages/threads/:threadId/messages', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { threadId } = req.params;
+    const messages = await clinicalWorkflowService.getThreadMessages(threadId, user.uid, user.role);
+    res.json({ messages });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error fetching thread messages:', err.message);
+    const status = err.message.includes('Forbidden') ? 403 : 404;
+    res.status(status).json({ error: err.message || 'Failed to retrieve messages' });
+  }
+});
+
+/**
+ * POST /api/messages/threads/:threadId/send
+ * Send a message to a thread in Supabase.
+ */
+router.post('/messages/threads/:threadId/send', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { threadId } = req.params;
+    const { text } = req.body;
+
+    if (!text || !text.trim()) {
+      res.status(400).json({ error: 'Message text is required' });
+      return;
+    }
+
+    const result = await clinicalWorkflowService.sendMessageToThread(threadId, user.uid, user.role, text.trim());
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error sending message:', err.message);
+    const status = err.message.includes('Forbidden') ? 403 : 400;
+    res.status(status).json({ error: err.message || 'Failed to send message' });
+  }
+});
+
+/**
+ * POST /api/messages/threads/:threadId/read
+ * Mark thread messages as read in Supabase.
+ */
+router.post('/messages/threads/:threadId/read', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { threadId } = req.params;
+
+    await clinicalWorkflowService.markThreadRead(threadId, user.uid, user.role);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error marking thread read:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to mark thread read' });
+  }
+});
+
+/**
+ * GET /api/messages/consultations/:consultationId/thread
+ * Retrieve or resolve canonical thread for a consultation.
+ */
+router.get('/messages/consultations/:consultationId/thread', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { consultationId } = req.params;
+    const { messageRepository } = await import('../repositories/messageRepository');
+
+    const thread = await messageRepository.getThreadByConsultationId(consultationId);
+    if (!thread) {
+      res.json({ thread: null });
+      return;
+    }
+
+    // Verify user authorization for thread
+    const isParticipant = (user.role === 'patient' && thread.patient_id === user.uid) ||
+      (user.role === 'doctor' && thread.doctor_id === user.uid) ||
+      user.role === 'admin';
+
+    if (!isParticipant) {
+      res.status(403).json({ error: 'Forbidden: You are not a participant in this conversation.' });
+      return;
+    }
+
+    res.json({ thread });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error resolving consultation thread:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to resolve consultation thread' });
+  }
+});
+
+/**
+ * POST /api/messages/consultations/:consultationId/thread
+ * Ensure a canonical thread exists for a consultation.
+ */
+router.post('/messages/consultations/:consultationId/thread', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { consultationId } = req.params;
+    const { messageRepository } = await import('../repositories/messageRepository');
+
+    const details = await clinicalWorkflowService.getConsultationDetails(consultationId, user);
+    const consultation = details.consultation;
+
+    if (!consultation.assigned_to) {
+      res.status(400).json({ error: 'Consultation is unassigned. A clinician must claim the consultation before initiating messages.' });
+      return;
+    }
+
+    const threadId = await messageRepository.ensureThread(consultation.patient_id, consultation.assigned_to, consultationId);
+    res.json({ success: true, threadId });
+  } catch (err: any) {
+    console.error('[ClinicalRoutes] Error ensuring consultation thread:', err.message);
+    res.status(400).json({ error: err.message || 'Failed to create consultation thread' });
   }
 });
 

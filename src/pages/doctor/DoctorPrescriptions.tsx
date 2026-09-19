@@ -1,11 +1,7 @@
-import React, { useState } from 'react';
-import {
-  MOCK_PRESCRIPTIONS,
-  MOCK_PATIENTS,
-  PrescriptionRecord,
-} from '../../data/doctorMockData';
+import React, { useState, useEffect } from 'react';
 import { SectionHeader } from '../../components/doctor/common/SectionHeader';
 import { StatusBadge } from '../../components/doctor/common/StatusBadge';
+import { supabase } from '../../lib/supabase';
 import {
   Search,
   Plus,
@@ -18,17 +14,42 @@ import {
   Clock,
   Printer,
   ShieldCheck,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 
+export interface LivePrescription {
+  id: string;
+  consultationId?: string;
+  patientId: string;
+  patientName: string;
+  patientMrn: string;
+  medication: string;
+  strength: string;
+  form: string;
+  frequency: string;
+  route: string;
+  quantity: string;
+  refills: number;
+  instructions: string;
+  status: 'draft' | 'finalized';
+  date: string;
+  prescribedBy: string;
+  pharmacyDestination: string;
+}
+
 export default function DoctorPrescriptions() {
-  const [prescriptions, setPrescriptions] = useState<PrescriptionRecord[]>(MOCK_PRESCRIPTIONS);
+  const [prescriptions, setPrescriptions] = useState<LivePrescription[]>([]);
+  const [consultations, setConsultations] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'draft' | 'finalized'>('all');
   const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [selectedRx, setSelectedRx] = useState<PrescriptionRecord | null>(null);
+  const [selectedRx, setSelectedRx] = useState<LivePrescription | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Form states for new/editing prescription
-  const [formPatientId, setFormPatientId] = useState(MOCK_PATIENTS[0].id);
+  const [formConsultationId, setFormConsultationId] = useState('');
   const [formMedication, setFormMedication] = useState('Semaglutide 0.25mg Starter Pen');
   const [formStrength, setFormStrength] = useState('0.25mg / 0.5mL');
   const [formForm, setFormForm] = useState('Pre-filled Multi-Dose Pen');
@@ -40,6 +61,102 @@ export default function DoctorPrescriptions() {
     'Inject 0.25mg subcutaneously into abdomen or thigh once every 7 days on the same day each week.'
   );
 
+  const fetchLivePrescriptions = async () => {
+    setLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) return;
+
+      // 1. Fetch prescriptions
+      const rxRes = await fetch('/api/clinical/doctor/prescriptions', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      // 2. Fetch consultations for patient directory & fallback mapping
+      const consultRes = await fetch('/api/clinical/doctor/consultations', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      let consultList: any[] = [];
+      if (consultRes.ok) {
+        const cData = await consultRes.json();
+        consultList = cData.consultations || [];
+        setConsultations(consultList);
+        if (consultList.length > 0 && !formConsultationId) {
+          setFormConsultationId(consultList[0].id);
+        }
+      }
+
+      if (rxRes.ok) {
+        const rxData = await rxRes.json();
+        const rawRxs: any[] = rxData.prescriptions || [];
+
+        const mapped: LivePrescription[] = rawRxs.map((r) => {
+          const matchedConsult = consultList.find((c) => c.id === r.consultation_id);
+          const pResponses = matchedConsult?.responses || r.consultation?.responses || {};
+          const firstItem = (r.items && r.items[0]) || {};
+
+          return {
+            id: r.id,
+            consultationId: r.consultation_id,
+            patientId: r.patient_id,
+            patientName: pResponses.fullName || 'Patient',
+            patientMrn: `MRN-${(r.consultation_id || r.id).slice(0, 6).toUpperCase()}`,
+            medication: firstItem.medication_name || 'Clinical Prescription',
+            strength: firstItem.strength || 'As prescribed',
+            form: firstItem.dosage_form || 'Formulation',
+            frequency: 'Weekly',
+            route: 'Subcutaneous',
+            quantity: `${firstItem.quantity || 1} Pen`,
+            refills: r.refill_count || 0,
+            instructions: r.directions || 'Inject as directed weekly.',
+            status: r.status === 'active' || r.status === 'finalized' ? 'finalized' : 'draft',
+            date: (r.created_at || '').slice(0, 10) || 'Recent',
+            prescribedBy: 'Attending Clinician',
+            pharmacyDestination: 'Suga Partner Compounding Pharmacy',
+          };
+        });
+
+        // Also include approved consultations with medication options that haven't finalized separate table rows
+        consultList.forEach((c) => {
+          if (c.responses?.medicationOptions?.options?.length > 0 && !mapped.some((m) => m.consultationId === c.id)) {
+            const firstOpt = c.responses.medicationOptions.options[0];
+            mapped.push({
+              id: `rx-${c.id.slice(0, 8)}`,
+              consultationId: c.id,
+              patientId: c.patient_id,
+              patientName: c.responses.fullName || 'Patient Intake',
+              patientMrn: `MRN-${c.id.slice(0, 6).toUpperCase()}`,
+              medication: firstOpt.name || 'Compounded Protocol',
+              strength: firstOpt.strength || 'Standard',
+              form: firstOpt.dosageForm || 'Subcutaneous',
+              frequency: 'Weekly',
+              route: 'Subcutaneous',
+              quantity: '1 Unit',
+              refills: 1,
+              instructions: c.responses.signOff?.treatmentSummary || 'Follow prescribed protocol.',
+              status: c.status === 'completed' ? 'finalized' : 'draft',
+              date: (c.submitted_at || c.created_at || '').slice(0, 10) || 'Recent',
+              prescribedBy: 'Attending Clinician',
+              pharmacyDestination: 'Suga Partner Compounding Pharmacy',
+            });
+          }
+        });
+
+        setPrescriptions(mapped);
+      }
+    } catch (err) {
+      console.warn('DoctorPrescriptions fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLivePrescriptions();
+  }, []);
+
   const filteredList = prescriptions.filter((rx) => {
     const matchesSearch =
       rx.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -49,44 +166,83 @@ export default function DoctorPrescriptions() {
     return matchesSearch && matchesTab;
   });
 
-  const handleSaveDraft = () => {
-    const patientObj = MOCK_PATIENTS.find((p) => p.id === formPatientId) || MOCK_PATIENTS[0];
-    const newRx: PrescriptionRecord = {
-      id: `rx-${Date.now().toString().slice(-4)}`,
-      patientId: patientObj.id,
-      patientName: patientObj.name,
-      patientMrn: patientObj.mrn,
-      medication: formMedication,
-      strength: formStrength,
-      form: formForm,
-      frequency: formFrequency,
-      route: formRoute,
-      quantity: formQuantity,
-      refills: formRefills,
-      instructions: formInstructions,
-      status: 'draft',
-      date: new Date().toISOString().split('T')[0],
-      prescribedBy: 'Dr. Sarah Mitchell, MD',
-      pharmacyDestination: 'Suga Partner Compounding Pharmacy',
-    };
-    setPrescriptions([newRx, ...prescriptions]);
-    setIsEditorOpen(false);
+  const handleSaveDraft = async () => {
+    if (!formConsultationId) {
+      alert('Please select an active consultation.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) return;
+
+      const res = await fetch(`/api/clinical/consultations/${formConsultationId}/prescription`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          directions: formInstructions,
+          refillCount: formRefills,
+          refillIntervalDays: 30,
+          medicationOptions: [
+            {
+              id: 'med-opt-1',
+              name: formMedication,
+              strength: formStrength,
+              dosageForm: formForm,
+              priceInr: 2999,
+              description: formInstructions,
+            },
+          ],
+          customClinicianMessage: `Prescribed: ${formMedication}. Follow directions carefully.`,
+        }),
+      });
+
+      if (res.ok) {
+        setIsEditorOpen(false);
+        await fetchLivePrescriptions();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.error || 'Failed to save prescription.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error saving prescription');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleFinalizeRx = (id: string) => {
-    setPrescriptions((prev) =>
-      prev.map((rx) =>
-        rx.id === id
-          ? {
-              ...rx,
-              status: 'finalized',
-              lockedAt: new Date().toISOString(),
-            }
-          : rx
-      )
-    );
-    if (selectedRx?.id === id) {
-      setSelectedRx((prev) => (prev ? { ...prev, status: 'finalized', lockedAt: new Date().toISOString() } : null));
+  const handleFinalizeRx = async (rx: LivePrescription) => {
+    if (!rx.consultationId) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) return;
+
+      const res = await fetch(`/api/clinical/consultations/${rx.consultationId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          clinicianAttestation: true,
+          treatmentSummary: rx.instructions,
+        }),
+      });
+
+      if (res.ok) {
+        await fetchLivePrescriptions();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.error || 'Failed to finalize prescription.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error finalizing prescription');
     }
   };
 
@@ -150,70 +306,85 @@ export default function DoctorPrescriptions() {
 
       {/* 3. Prescription Ledger Table */}
       <div className="bg-white border border-stone-200 rounded-xl overflow-hidden shadow-2xs">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-stone-600">
-            <thead className="bg-stone-50/80 text-stone-500 font-semibold border-b border-stone-200 uppercase text-3xs tracking-wider">
-              <tr>
-                <th className="py-3 px-4">Rx ID & Date</th>
-                <th className="py-3 px-4">Patient Name & MRN</th>
-                <th className="py-3 px-4">Medication & Strength</th>
-                <th className="py-3 px-4">Refills & Qty</th>
-                <th className="py-3 px-4">Pharmacy Destination</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-100">
-              {filteredList.map((rx) => (
-                <tr key={rx.id} className="hover:bg-stone-50/70 transition-colors">
-                  <td className="py-3.5 px-4 font-mono text-2xs">
-                    <span className="font-semibold text-stone-900 block">{rx.id}</span>
-                    <span className="text-stone-400">{rx.date}</span>
-                  </td>
-
-                  <td className="py-3.5 px-4">
-                    <span className="font-semibold text-stone-900 block">{rx.patientName}</span>
-                    <span className="font-mono text-2xs text-stone-400">{rx.patientMrn}</span>
-                  </td>
-
-                  <td className="py-3.5 px-4">
-                    <span className="font-semibold text-stone-900 block">{rx.medication}</span>
-                    <span className="text-2xs text-stone-500">{rx.strength} • {rx.form}</span>
-                  </td>
-
-                  <td className="py-3.5 px-4 text-2xs text-stone-700">
-                    <div>Refills: {rx.refills}</div>
-                    <div className="text-stone-400">Qty: {rx.quantity}</div>
-                  </td>
-
-                  <td className="py-3.5 px-4 text-2xs text-stone-500">
-                    {rx.pharmacyDestination}
-                  </td>
-
-                  <td className="py-3.5 px-4">
-                    <StatusBadge status={rx.status} />
-                  </td>
-
-                  <td className="py-3.5 px-4 text-right space-x-2">
-                    {rx.status === 'draft' ? (
-                      <button
-                        onClick={() => handleFinalizeRx(rx.id)}
-                        className="px-2.5 py-1 rounded bg-stone-900 hover:bg-stone-800 text-white font-medium text-2xs transition-colors"
-                      >
-                        Sign & Finalize
-                      </button>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-2xs text-stone-500 font-mono">
-                        <Lock className="w-3 h-3 text-emerald-700" />
-                        <span>Signed EPCS</span>
-                      </span>
-                    )}
-                  </td>
+        {loading ? (
+          <div className="p-12 flex flex-col items-center justify-center gap-3 text-stone-500 text-xs">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span>Loading prescription records...</span>
+          </div>
+        ) : filteredList.length === 0 ? (
+          <div className="p-12 text-center space-y-2">
+            <FileSpreadsheet className="w-8 h-8 text-stone-300 mx-auto" />
+            <p className="text-xs text-stone-500 font-medium">No prescription records found.</p>
+            <p className="text-2xs text-stone-400">
+              Prescriptions are formulated and electronically authorized directly during consultation intake reviews.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-stone-600">
+              <thead className="bg-stone-50/80 text-stone-500 font-semibold border-b border-stone-200 uppercase text-3xs tracking-wider">
+                <tr>
+                  <th className="py-3 px-4">Rx ID & Date</th>
+                  <th className="py-3 px-4">Patient Name & MRN</th>
+                  <th className="py-3 px-4">Medication & Strength</th>
+                  <th className="py-3 px-4">Refills & Qty</th>
+                  <th className="py-3 px-4">Pharmacy Destination</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {filteredList.map((rx) => (
+                  <tr key={rx.id} className="hover:bg-stone-50/70 transition-colors">
+                    <td className="py-3.5 px-4 font-mono text-2xs">
+                      <span className="font-semibold text-stone-900 block">{rx.id}</span>
+                      <span className="text-stone-400">{rx.date}</span>
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <span className="font-semibold text-stone-900 block">{rx.patientName}</span>
+                      <span className="font-mono text-2xs text-stone-400">{rx.patientMrn}</span>
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <span className="font-semibold text-stone-900 block">{rx.medication}</span>
+                      <span className="text-2xs text-stone-500">{rx.strength} • {rx.form}</span>
+                    </td>
+
+                    <td className="py-3.5 px-4 text-2xs text-stone-700">
+                      <div>Refills: {rx.refills}</div>
+                      <div className="text-stone-400">Qty: {rx.quantity}</div>
+                    </td>
+
+                    <td className="py-3.5 px-4 text-2xs text-stone-500">
+                      {rx.pharmacyDestination}
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <StatusBadge status={rx.status} />
+                    </td>
+
+                    <td className="py-3.5 px-4 text-right space-x-2">
+                      {rx.status === 'draft' ? (
+                        <button
+                          onClick={() => handleFinalizeRx(rx)}
+                          className="px-2.5 py-1 rounded bg-stone-900 hover:bg-stone-800 text-white font-medium text-2xs transition-colors"
+                        >
+                          Sign & Finalize
+                        </button>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-2xs text-stone-500 font-mono">
+                          <Lock className="w-3 h-3 text-emerald-700" />
+                          <span>Signed EPCS</span>
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* 4. Prescription Editor Modal */}
@@ -238,19 +409,23 @@ export default function DoctorPrescriptions() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
                 <label className="text-2xs font-semibold text-stone-600 uppercase block mb-1">
-                  Select Patient
+                  Select Patient Intake
                 </label>
-                <select
-                  value={formPatientId}
-                  onChange={(e) => setFormPatientId(e.target.value)}
-                  className="w-full p-2 bg-stone-50 border border-stone-200 rounded-lg text-xs font-medium"
-                >
-                  {MOCK_PATIENTS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.mrn})
-                    </option>
-                  ))}
-                </select>
+                {consultations.length === 0 ? (
+                  <p className="text-xs text-stone-400">No active patient consultations available.</p>
+                ) : (
+                  <select
+                    value={formConsultationId}
+                    onChange={(e) => setFormConsultationId(e.target.value)}
+                    className="w-full p-2 bg-stone-50 border border-stone-200 rounded-lg text-xs font-medium"
+                  >
+                    {consultations.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.responses?.fullName || 'Patient Intake'} (MRN-{c.id.slice(0, 6).toUpperCase()})
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <div>
@@ -338,7 +513,7 @@ export default function DoctorPrescriptions() {
 
             <div className="flex items-center justify-between pt-3 border-t border-stone-200">
               <span className="text-3xs text-stone-400 font-mono">
-                Attending: Dr. Sarah Mitchell, MD
+                Attending: Electronic Prescriber
               </span>
               <div className="flex gap-2">
                 <button
@@ -350,10 +525,12 @@ export default function DoctorPrescriptions() {
                 </button>
                 <button
                   type="button"
+                  disabled={isSaving || consultations.length === 0}
                   onClick={handleSaveDraft}
-                  className="px-4 py-1.5 rounded-lg bg-stone-900 text-white text-xs font-semibold hover:bg-stone-800"
+                  className="px-4 py-1.5 rounded-lg bg-stone-900 text-white text-xs font-semibold hover:bg-stone-800 disabled:opacity-50 flex items-center gap-2"
                 >
-                  Save Draft Prescription
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Save Draft Prescription</span>
                 </button>
               </div>
             </div>

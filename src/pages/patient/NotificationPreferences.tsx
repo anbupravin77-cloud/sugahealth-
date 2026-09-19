@@ -171,7 +171,7 @@ export function NotificationPreferences() {
       </div>
 
       <div className="flex items-center justify-end gap-4 pt-4">
-        {success && <span className="text-sm font-medium text-emerald-600">Preferences updated</span>}
+        {success && <span className="text-sm font-medium text-emerald-600">Preferences saved</span>}
         <button
           type="submit"
           disabled={saving}

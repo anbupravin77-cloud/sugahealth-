@@ -81,7 +81,7 @@ FROM public.staff_profiles sp
 JOIN public.profiles p ON p.id = sp.id
 WHERE sp.role = 'doctor'
   AND sp.active = true
-  AND sp.onboarding_status = 'approved';
+  AND sp.onboarding_status = 'completed';
 
 -- Restrict execution grant to authenticated users
 REVOKE ALL ON public.v_doctor_directory FROM PUBLIC;

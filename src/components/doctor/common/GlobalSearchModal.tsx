@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MOCK_PATIENTS, MOCK_CONSULTATIONS } from '../../../data/doctorMockData';
-import { Search, User, FileText, ArrowRight, X, Sparkles } from 'lucide-react';
+import { Search, User, FileText, ArrowRight, X, Sparkles, Loader2 } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
+import { supabase } from '../../../lib/supabase';
 
 interface GlobalSearchModalProps {
   isOpen: boolean;
@@ -11,7 +11,35 @@ interface GlobalSearchModalProps {
 
 export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, onClose }) => {
   const [query, setQuery] = useState('');
+  const [consultations, setConsultations] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    async function loadData() {
+      setLoading(true);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          const res = await fetch('/api/clinical/doctor/consultations', {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setConsultations(data.consultations || []);
+          }
+        }
+      } catch (err) {
+        console.warn('Global search data load error:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadData();
+  }, [isOpen]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -19,8 +47,6 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
         e.preventDefault();
         if (isOpen) {
           onClose();
-        } else {
-          // handled by parent or toggled
         }
       }
       if (e.key === 'Escape' && isOpen) {
@@ -33,24 +59,54 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
 
   if (!isOpen) return null;
 
+  // Extract unique patients from consultations
+  const patientMap = new Map<string, any>();
+  consultations.forEach((c) => {
+    const pid = c.patient_id;
+    if (!patientMap.has(pid)) {
+      const responses = c.responses || {};
+      patientMap.set(pid, {
+        id: pid,
+        name: responses.fullName || 'Patient Intake',
+        mrn: `MRN-${c.id?.slice(0, 6).toUpperCase()}`,
+        primaryConcern: c.primary_concern === 'weight' ? 'GLP-1 Weight Management' : 'Telehealth Intake',
+        careStatus: c.status === 'completed' ? 'active_care' : 'awaiting_review',
+      });
+    }
+  });
+  const patients = Array.from(patientMap.values());
+
   const filteredPatients = query.trim()
-    ? MOCK_PATIENTS.filter(
+    ? patients.filter(
         (p) =>
           p.name.toLowerCase().includes(query.toLowerCase()) ||
           p.mrn.toLowerCase().includes(query.toLowerCase()) ||
           p.primaryConcern.toLowerCase().includes(query.toLowerCase())
       )
-    : MOCK_PATIENTS.slice(0, 4);
+    : patients.slice(0, 4);
 
   const filteredConsultations = query.trim()
-    ? MOCK_CONSULTATIONS.filter(
-        (c) =>
-          c.patientName.toLowerCase().includes(query.toLowerCase()) ||
-          c.requestedMedication.toLowerCase().includes(query.toLowerCase()) ||
-          c.category.toLowerCase().includes(query.toLowerCase()) ||
-          c.mrn.toLowerCase().includes(query.toLowerCase())
-      )
-    : MOCK_CONSULTATIONS.slice(0, 3);
+    ? consultations
+        .map((c) => ({
+          id: c.id,
+          patientName: c.responses?.fullName || 'Patient Intake',
+          category: c.primary_concern === 'weight' ? 'GLP-1 Weight' : 'General Care',
+          requestedMedication: c.responses?.primaryConcern || 'Clinical Protocol',
+          status: c.status,
+        }))
+        .filter(
+          (c) =>
+            c.patientName.toLowerCase().includes(query.toLowerCase()) ||
+            c.requestedMedication.toLowerCase().includes(query.toLowerCase()) ||
+            c.category.toLowerCase().includes(query.toLowerCase())
+        )
+    : consultations.slice(0, 3).map((c) => ({
+        id: c.id,
+        patientName: c.responses?.fullName || 'Patient Intake',
+        category: c.primary_concern === 'weight' ? 'GLP-1 Weight' : 'General Care',
+        requestedMedication: c.responses?.primaryConcern || 'Clinical Protocol',
+        status: c.status,
+      }));
 
   const handleSelectPatient = (id: string) => {
     navigate(`/doctor/patients/${id}`);

@@ -38,32 +38,36 @@ export default function DoctorProfile() {
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <h2 className="text-xl sm:text-2xl font-bold text-stone-900 font-sans tracking-tight">
-                  {doctor?.name || 'Dr. Sarah Mitchell'}
+                  {doctor?.name || 'Attending Physician'}
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-2xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                  {doctor?.credentials || 'MD, FACP'}
-                </span>
+                {doctor?.credentials && (
+                  <span className="px-2 py-0.5 rounded-full text-2xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    {doctor.credentials}
+                  </span>
+                )}
               </div>
-              <p className="text-xs sm:text-sm text-stone-600 font-medium">{doctor?.title}</p>
-              <p className="text-xs text-stone-400">{doctor?.affiliation}</p>
+              <p className="text-xs sm:text-sm text-stone-600 font-medium">{doctor?.title || 'Telehealth Physician'}</p>
+              <p className="text-xs text-stone-400">{doctor?.affiliation || 'Suga.Health Clinical Network'}</p>
             </div>
           </div>
 
           <div className="px-3.5 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold self-start sm:self-auto flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-            <span>Active Telehealth License</span>
+            <span>Active Telehealth Provider</span>
           </div>
         </div>
 
         {/* Bio */}
-        <div className="space-y-1.5 text-xs text-stone-700">
-          <span className="font-semibold uppercase text-3xs text-stone-400 tracking-wider">
-            Clinical Biography & Focus
-          </span>
-          <p className="leading-relaxed bg-stone-50 p-3.5 rounded-xl border border-stone-100">
-            {doctor?.bio}
-          </p>
-        </div>
+        {doctor?.bio && (
+          <div className="space-y-1.5 text-xs text-stone-700">
+            <span className="font-semibold uppercase text-3xs text-stone-400 tracking-wider">
+              Clinical Biography & Focus
+            </span>
+            <p className="leading-relaxed bg-stone-50 p-3.5 rounded-xl border border-stone-100">
+              {doctor.bio}
+            </p>
+          </div>
+        )}
 
         {/* Credentialing & Registry Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2">
@@ -72,8 +76,8 @@ export default function DoctorProfile() {
               <span className="font-semibold uppercase tracking-wider">Primary Medical License</span>
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
             </div>
-            <p className="text-stone-900 font-mono font-bold text-sm">{doctor?.licenseNumber}</p>
-            <p className="text-3xs text-stone-400">California Medical Board (Active / Good Standing)</p>
+            <p className="text-stone-900 font-mono font-bold text-sm">{doctor?.licenseNumber || 'Not configured'}</p>
+            <p className="text-3xs text-stone-400">State Medical Board Licensure</p>
           </div>
 
           <div className="p-4 bg-stone-50 rounded-xl border border-stone-200/80 space-y-1">
@@ -81,8 +85,8 @@ export default function DoctorProfile() {
               <span className="font-semibold uppercase tracking-wider">National Provider Identifier (NPI)</span>
               <FileCheck2 className="w-3.5 h-3.5 text-stone-500" />
             </div>
-            <p className="text-stone-900 font-mono font-bold text-sm">{doctor?.npiNumber}</p>
-            <p className="text-3xs text-stone-400">NPPES Enumerator Registered</p>
+            <p className="text-stone-900 font-mono font-bold text-sm">{doctor?.npiNumber || 'Not configured'}</p>
+            <p className="text-3xs text-stone-400">NPPES Enumerator Registry</p>
           </div>
 
           <div className="p-4 bg-stone-50 rounded-xl border border-stone-200/80 space-y-1">
@@ -90,8 +94,8 @@ export default function DoctorProfile() {
               <span className="font-semibold uppercase tracking-wider">DEA Registration</span>
               <ShieldCheck className="w-3.5 h-3.5 text-stone-500" />
             </div>
-            <p className="text-stone-900 font-mono font-bold text-sm">{doctor?.deaNumber}</p>
-            <p className="text-3xs text-stone-400">Schedule II - V Electronic Prescribing Authority</p>
+            <p className="text-stone-900 font-mono font-bold text-sm">{doctor?.deaNumber || 'Not configured'}</p>
+            <p className="text-3xs text-stone-400">Electronic Prescribing Registration</p>
           </div>
 
           <div className="p-4 bg-stone-50 rounded-xl border border-stone-200/80 space-y-1">
@@ -100,9 +104,9 @@ export default function DoctorProfile() {
               <MapPin className="w-3.5 h-3.5 text-emerald-700" />
             </div>
             <p className="text-emerald-800 font-bold text-sm">
-              {doctor?.assignedJurisdiction.join(', ')}
+              {doctor?.assignedJurisdiction && doctor.assignedJurisdiction.length > 0 ? doctor.assignedJurisdiction.join(', ') : 'Not configured'}
             </p>
-            <p className="text-3xs text-stone-400">Interstate Medical Licensure Compact (IMLC)</p>
+            <p className="text-3xs text-stone-400">Authorized Medical Jurisdictions</p>
           </div>
         </div>
 
@@ -112,7 +116,7 @@ export default function DoctorProfile() {
             <Mail className="w-4 h-4 text-stone-400" />
             <div>
               <span className="text-3xs uppercase font-semibold text-stone-400 block">Clinical Email</span>
-              <span className="font-medium text-stone-800">{doctor?.email}</span>
+              <span className="font-medium text-stone-800">{doctor?.email || 'Not configured'}</span>
             </div>
           </div>
 
@@ -120,7 +124,7 @@ export default function DoctorProfile() {
             <Clock className="w-4 h-4 text-stone-400" />
             <div>
               <span className="text-3xs uppercase font-semibold text-stone-400 block">Telehealth Hours</span>
-              <span className="font-medium text-stone-800">{doctor?.availabilityHours}</span>
+              <span className="font-medium text-stone-800">{doctor?.availabilityHours || 'Standard On-Call'}</span>
             </div>
           </div>
         </div>

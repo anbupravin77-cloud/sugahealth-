@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { MOCK_PATIENTS, Patient } from '../../data/doctorMockData';
 import { SectionHeader } from '../../components/doctor/common/SectionHeader';
 import { StatusBadge } from '../../components/doctor/common/StatusBadge';
+import { supabase } from '../../lib/supabase';
 import {
   Search,
   Users,
@@ -14,14 +14,68 @@ import {
   Plus,
   ArrowRight,
   FileText,
+  Loader2,
 } from 'lucide-react';
 
 export default function DoctorPatients() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [patients, setPatients] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const filteredPatients = MOCK_PATIENTS.filter((patient) => {
+  useEffect(() => {
+    async function loadPatients() {
+      setLoading(true);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          const res = await fetch('/api/clinical/doctor/consultations', {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const consults = data.consultations || [];
+            
+            // Map consultations to unique patients
+            const patientMap = new Map<string, any>();
+            consults.forEach((c: any) => {
+              const pid = c.patient_id;
+              const responses = c.responses || {};
+              if (!patientMap.has(pid)) {
+                patientMap.set(pid, {
+                  id: pid,
+                  name: responses.fullName || 'Patient',
+                  mrn: `MRN-${c.id?.slice(0, 6).toUpperCase()}`,
+                  email: c.email || 'N/A',
+                  phone: responses.phone || 'N/A',
+                  age: responses.age || 'N/A',
+                  gender: responses.sex ? responses.sex.charAt(0).toUpperCase() + responses.sex.slice(1) : 'N/A',
+                  city: responses.shippingAddress?.city || 'N/A',
+                  state: responses.shippingAddress?.state || 'N/A',
+                  primaryConcern: c.primary_concern === 'weight' ? 'GLP-1 Weight Management' : 'Telehealth Intake',
+                  careCategory: c.primary_concern === 'weight' ? 'weight' : 'general',
+                  careStatus: c.status === 'completed' ? 'active_care' : 'awaiting_review',
+                  currentMedicationSummary: responses.currentMedication || responses.medicationPreference || 'N/A',
+                  latestConsultationId: c.id,
+                });
+              }
+            });
+            setPatients(Array.from(patientMap.values()));
+          }
+        }
+      } catch (err) {
+        console.warn('Patients load error:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadPatients();
+  }, []);
+
+  const filteredPatients = patients.filter((patient) => {
     const matchesSearch =
       patient.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       patient.mrn.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -104,65 +158,82 @@ export default function DoctorPatients() {
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {filteredPatients.map((patient) => (
-                <tr
-                  key={patient.id}
-                  className="hover:bg-stone-50/70 transition-colors group cursor-pointer"
-                >
-                  <td className="py-3.5 px-4">
-                    <Link
-                      to={`/doctor/patients/${patient.id}`}
-                      className="flex items-center gap-3 font-semibold text-stone-900 group-hover:text-emerald-800"
-                    >
-                      <div className="w-8 h-8 rounded-full bg-stone-100 border border-stone-200 flex items-center justify-center font-bold text-stone-700 text-xs">
-                        {patient.name[0]}
-                      </div>
-                      <div>
-                        <div className="text-sm font-sans font-semibold text-stone-900">
-                          {patient.name}
-                        </div>
-                        <span className="font-mono text-2xs text-stone-400">
-                          {patient.mrn}
-                        </span>
-                      </div>
-                    </Link>
-                  </td>
-
-                  <td className="py-3.5 px-4 text-stone-600">
-                    <div>
-                      {patient.age} y/o {patient.gender}
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-stone-500">
+                    <div className="inline-flex items-center gap-2 text-xs">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Loading patient directory...</span>
                     </div>
-                    <div className="text-3xs text-stone-400">
-                      {patient.city}, {patient.state}
-                    </div>
-                  </td>
-
-                  <td className="py-3.5 px-4">
-                    <div className="font-medium text-stone-800 line-clamp-1">
-                      {patient.primaryConcern}
-                    </div>
-                    <div className="text-3xs text-stone-400">{patient.careCategory}</div>
-                  </td>
-
-                  <td className="py-3.5 px-4 text-stone-700 font-mono text-2xs">
-                    <span className="line-clamp-1">{patient.currentMedicationsSummary}</span>
-                  </td>
-
-                  <td className="py-3.5 px-4">
-                    <StatusBadge status={patient.careStatus} />
-                  </td>
-
-                  <td className="py-3.5 px-4 text-right">
-                    <Link
-                      to={`/doctor/patients/${patient.id}`}
-                      className="inline-flex items-center gap-1 px-3 py-1 rounded-md bg-stone-100 group-hover:bg-stone-900 group-hover:text-white text-stone-700 font-medium text-xs transition-colors"
-                    >
-                      <span>Open Chart</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </Link>
                   </td>
                 </tr>
-              ))}
+              ) : filteredPatients.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-stone-400">
+                    <p className="text-xs">No patients found in directory matching your criteria.</p>
+                  </td>
+                </tr>
+              ) : (
+                filteredPatients.map((patient) => (
+                  <tr
+                    key={patient.id}
+                    className="hover:bg-stone-50/70 transition-colors group cursor-pointer"
+                  >
+                    <td className="py-3.5 px-4">
+                      <Link
+                        to={`/doctor/patients/${patient.id}`}
+                        className="flex items-center gap-3 font-semibold text-stone-900 group-hover:text-emerald-800"
+                      >
+                        <div className="w-8 h-8 rounded-full bg-stone-100 border border-stone-200 flex items-center justify-center font-bold text-stone-700 text-xs">
+                          {patient.name[0]}
+                        </div>
+                        <div>
+                          <div className="text-sm font-sans font-semibold text-stone-900">
+                            {patient.name}
+                          </div>
+                          <span className="font-mono text-2xs text-stone-400">
+                            {patient.mrn}
+                          </span>
+                        </div>
+                      </Link>
+                    </td>
+
+                    <td className="py-3.5 px-4 text-stone-600">
+                      <div>
+                        {patient.age} y/o {patient.gender}
+                      </div>
+                      <div className="text-3xs text-stone-400">
+                        {patient.city}, {patient.state}
+                      </div>
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <div className="font-medium text-stone-800 line-clamp-1">
+                        {patient.primaryConcern}
+                      </div>
+                      <div className="text-3xs text-stone-400">{patient.careCategory}</div>
+                    </td>
+
+                    <td className="py-3.5 px-4 text-stone-700 font-mono text-2xs">
+                      <span className="line-clamp-1">{patient.currentMedicationsSummary}</span>
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <StatusBadge status={patient.careStatus} />
+                    </td>
+
+                    <td className="py-3.5 px-4 text-right">
+                      <Link
+                        to={`/doctor/patients/${patient.id}`}
+                        className="inline-flex items-center gap-1 px-3 py-1 rounded-md bg-stone-100 group-hover:bg-stone-900 group-hover:text-white text-stone-700 font-medium text-xs transition-colors"
+                      >
+                        <span>Open Chart</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

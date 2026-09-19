@@ -9,6 +9,8 @@ function validateSqlFiles() {
   const initialMigrationPath = path.join(process.cwd(), 'supabase', 'migrations', '20260918000000_initial_schema.sql');
   const hardeningMigrationPath = path.join(process.cwd(), 'supabase', 'migrations', '20260918010000_security_hardening.sql');
   const viewRefinementPath = path.join(process.cwd(), 'supabase', 'migrations', '20260918020000_view_security_refinement.sql');
+  const phase5hMigrationPath = path.join(process.cwd(), 'supabase', 'migrations', '20260918030000_phase5h_schema_integrity.sql');
+  const phase5iMigrationPath = path.join(process.cwd(), 'supabase', 'migrations', '20260918040000_phase5i_schema_fix.sql');
   const testPath = path.join(process.cwd(), 'supabase', 'tests', 'rls_test.sql');
 
   if (!fs.existsSync(initialMigrationPath)) {
@@ -19,6 +21,12 @@ function validateSqlFiles() {
   }
   if (!fs.existsSync(viewRefinementPath)) {
     throw new Error(`View refinement migration file not found at ${viewRefinementPath}`);
+  }
+  if (!fs.existsSync(phase5hMigrationPath)) {
+    throw new Error(`Phase 5H migration file not found at ${phase5hMigrationPath}`);
+  }
+  if (!fs.existsSync(phase5iMigrationPath)) {
+    throw new Error(`Phase 5I migration file not found at ${phase5iMigrationPath}`);
   }
   if (!fs.existsSync(testPath)) {
     throw new Error(`Test file not found at ${testPath}`);

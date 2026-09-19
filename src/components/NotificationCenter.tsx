@@ -1,13 +1,28 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Bell, Check, Loader2, Info } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
+import { Bell, Check, Loader2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 
 export default function NotificationCenter() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
+
+  const getAccessToken = async (): Promise<string | null> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user && typeof (user as any).getIdToken === 'function') {
+      try {
+        return await (user as any).getIdToken();
+      } catch {}
+    }
+    return null;
+  };
 
   useEffect(() => {
     if (user) {
@@ -17,15 +32,27 @@ export default function NotificationCenter() {
 
   const fetchNotifications = async () => {
     try {
-      const token = await user?.getIdToken();
-      const res = await fetch('/api/notifications', {
+      const token = await getAccessToken();
+      if (!token) return;
+
+      const res = await fetch('/api/clinical/notifications', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
       if (res.ok) {
         const data = await res.json();
-        setNotifications(data);
+        const list = (data.notifications || []).map((n: any) => ({
+          id: n.id,
+          title: n.title,
+          shortMessage: n.message || n.short_message,
+          status: n.read || n.status === 'read' ? 'read' : 'unread',
+          createdAt: n.created_at || new Date().toISOString(),
+          relatedEntityType: n.related_entity_type,
+          relatedEntityId: n.related_entity_id,
+          actionUrl: n.action_url || (n.related_entity_type === 'consultation' ? '/consultation' : '/account'),
+        }));
+        setNotifications(list);
       }
     } catch {
       // Fallback gracefully
@@ -36,8 +63,10 @@ export default function NotificationCenter() {
 
   const markAsRead = async (id: string) => {
     try {
-      const token = await user?.getIdToken();
-      await fetch(`/api/notifications/${id}/read`, {
+      const token = await getAccessToken();
+      if (!token) return;
+
+      await fetch(`/api/clinical/notifications/${id}/read`, {
         method: 'PATCH',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -49,8 +78,10 @@ export default function NotificationCenter() {
 
   const markAllAsRead = async () => {
     try {
-      const token = await user?.getIdToken();
-      await fetch(`/api/notifications/read-all`, {
+      const token = await getAccessToken();
+      if (!token) return;
+
+      await fetch(`/api/clinical/notifications/read-all`, {
         method: 'PATCH',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -122,24 +153,13 @@ export default function NotificationCenter() {
                             <span className="text-xs text-neutral-400">
                               {new Date(notif.createdAt).toLocaleDateString()}
                             </span>
-                            {notif.relatedEntityType === 'order' && (
-                              <Link 
-                                to="/account"
-                                onClick={() => setIsOpen(false)}
-                                className="text-xs font-medium text-emerald-600 hover:text-emerald-700"
-                              >
-                                View Order
-                              </Link>
-                            )}
-                            {notif.relatedEntityType === 'consultation' && (
-                              <Link 
-                                to="/account" // Or wherever they view consults
-                                onClick={() => setIsOpen(false)}
-                                className="text-xs font-medium text-emerald-600 hover:text-emerald-700"
-                              >
-                                View Details
-                              </Link>
-                            )}
+                            <Link 
+                              to={notif.actionUrl}
+                              onClick={() => setIsOpen(false)}
+                              className="text-xs font-medium text-emerald-600 hover:text-emerald-700 font-semibold"
+                            >
+                              {notif.relatedEntityType === 'consultation' ? 'View Treatment Plan' : 'View Details'}
+                            </Link>
                           </div>
                         </div>
                       </div>

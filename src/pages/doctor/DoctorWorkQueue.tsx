@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { MOCK_CONSULTATIONS, Consultation as MockConsultation } from '../../data/doctorMockData';
 import { SectionHeader } from '../../components/doctor/common/SectionHeader';
 import { StatusBadge } from '../../components/doctor/common/StatusBadge';
 import { PriorityIndicator } from '../../components/doctor/common/PriorityIndicator';
@@ -25,9 +24,11 @@ export default function DoctorWorkQueue() {
 
   const [liveConsultations, setLiveConsultations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchConsultations = async () => {
     setLoading(true);
+    setError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.access_token) {
@@ -41,10 +42,14 @@ export default function DoctorWorkQueue() {
           if (data.consultations) {
             setLiveConsultations(data.consultations);
           }
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          setError(errData.error || 'Failed to load consultation work queue');
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Live consultations fetch error:', err);
+      setError(err.message || 'Failed to connect to clinical server');
     } finally {
       setLoading(false);
     }
@@ -85,37 +90,23 @@ export default function DoctorWorkQueue() {
     return {
       id: c.id,
       mrn: `MRN-${c.id.slice(0, 6).toUpperCase()}`,
-      patientName: responses.fullName || 'Patient Intake',
+      patientName: responses.fullName || 'Patient',
       patientId: c.patient_id,
-      age: 38,
-      gender: responses.sex ? responses.sex.charAt(0).toUpperCase() + responses.sex.slice(1) : 'Patient',
+      patientAge: responses.age || 'N/A',
+      patientGender: responses.sex ? responses.sex.charAt(0).toUpperCase() + responses.sex.slice(1) : 'N/A',
       category: categoryName,
-      requestedMedication: responses.primaryConcern === 'weight' ? 'Compounded Semaglutide' : 'Formulated Protocol',
+      requestedMedication: responses.requestedMedication || responses.medicationPreference || (c.primary_concern === 'weight' ? 'GLP-1 Weight Management' : 'Telehealth Intake'),
       reasonForReview: responses.conditions?.join(', ') || 'Asynchronous clinical evaluation',
       chiefComplaint: responses.medicalHistory || 'Patient initiated telehealth intake.',
       triagePriority: 'normal' as const,
       status: c.status === 'completed' ? 'completed' : c.status === 'under_review' ? 'in_review' : 'pending_review',
       submittedAt: c.submitted_at || c.created_at,
-      waitTimeFormatted: 'Just now',
+      waitTimeFormatted: 'Recent',
       isLive: true,
     };
   });
 
-  // Combine live and mock consultations (avoid duplicate IDs)
-  const combined = [
-    ...mappedLive.map((m) => ({
-      ...m,
-      patientAge: m.age,
-      patientGender: m.gender,
-      isLive: true,
-    })),
-    ...MOCK_CONSULTATIONS.filter((m) => !mappedLive.some((l) => l.id === m.id)).map((m) => ({
-      ...m,
-      isLive: false,
-    })),
-  ];
-
-  const filteredConsultations = combined.filter((item) => {
+  const filteredConsultations = mappedLive.filter((item) => {
     const matchesSearch =
       item.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.mrn.toLowerCase().includes(searchQuery.toLowerCase()) ||

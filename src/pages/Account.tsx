@@ -126,9 +126,11 @@ export default function Account() {
         const results: any[] = [];
 
         // 1. Fetch Supabase clinical consultations
+        let hasSupabaseConsultations = false;
         try {
           const { data: { session } } = await supabase.auth.getSession();
           if (session?.access_token) {
+            hasSupabaseConsultations = true;
             const res = await fetch('/api/clinical/consultations/patient', {
               headers: { 'Authorization': `Bearer ${session.access_token}` },
             });
@@ -143,6 +145,7 @@ export default function Account() {
                     updatedAt: sc.updated_at || sc.created_at,
                     isSupabase: true,
                     selectedOption: sc.selected_medication_option,
+                    responses: sc.responses,
                   });
                 });
               }
@@ -152,8 +155,8 @@ export default function Account() {
           console.warn('Clinical consultations fetch error:', err);
         }
 
-        // 2. Fetch Firestore consultations (if user exists in firebase)
-        if (user) {
+        // 2. Fetch legacy Firestore consultations ONLY if not a Supabase user
+        if (!hasSupabaseConsultations && user) {
           try {
             const q = query(
               collection(db, 'consultations'),
@@ -295,7 +298,7 @@ export default function Account() {
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-neutral-300 bg-white text-sm font-medium text-neutral-800 hover:bg-neutral-50 hover:border-neutral-400 transition-colors shadow-2xs self-start sm:self-auto"
           >
             <ArrowLeft size={16} />
-            Back to Dashboard
+            Back to Home
           </Link>
         </div>
 

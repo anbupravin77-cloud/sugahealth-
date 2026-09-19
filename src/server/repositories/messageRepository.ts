@@ -9,7 +9,6 @@ export class MessageRepository {
       .from('message_threads')
       .select('id')
       .eq('consultation_id', consultationId)
-      .eq('status', 'open')
       .maybeSingle();
 
     if (!findError && existing) {
@@ -35,9 +34,19 @@ export class MessageRepository {
         updated_at: now,
       })
       .select('id')
-      .single();
+      .maybeSingle();
 
     if (error || !data) {
+      // Re-fetch in case of concurrent creation race condition
+      const { data: retryData } = await supabaseAdmin
+        .from('message_threads')
+        .select('id')
+        .eq('consultation_id', consultationId)
+        .maybeSingle();
+
+      if (retryData) {
+        return retryData.id;
+      }
       throw new Error(`Failed to ensure message thread: ${error?.message}`);
     }
 
@@ -58,6 +67,20 @@ export class MessageRepository {
     return data as DbMessageThread;
   }
 
+  async getThreadByConsultationId(consultationId: string): Promise<DbMessageThread | null> {
+    const { data, error } = await supabaseAdmin
+      .from('message_threads')
+      .select('*')
+      .eq('consultation_id', consultationId)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`[MessageRepository] getThreadByConsultationId failed for ${consultationId}:`, error.message);
+      return null;
+    }
+    return data as DbMessageThread;
+  }
+
   async listThreadsForUser(userId: string, role: UserRole): Promise<DbMessageThread[]> {
     let query = supabaseAdmin
       .from('message_threads')
@@ -68,6 +91,8 @@ export class MessageRepository {
       query = query.eq('patient_id', userId);
     } else if (role === 'doctor') {
       query = query.eq('doctor_id', userId);
+    } else {
+      return [];
     }
 
     const { data, error } = await query;
@@ -95,6 +120,11 @@ export class MessageRepository {
     }
     if (thread.status !== 'open') {
       throw new Error('Thread is closed');
+    }
+
+    // Verify role safety
+    if (params.senderRole !== 'patient' && params.senderRole !== 'doctor') {
+      throw new Error('Forbidden: Only patient and doctor roles may send clinical messages');
     }
 
     // Verify sender boundary
@@ -158,15 +188,29 @@ export class MessageRepository {
 
   async markAsRead(threadId: string, readerUid: string, readerRole: UserRole): Promise<void> {
     const thread = await this.getThread(threadId);
-    if (!thread) return;
+    if (!thread) {
+      throw new Error('Message thread not found');
+    }
+
+    if (readerRole === 'patient') {
+      if (thread.patient_id !== readerUid) {
+        throw new Error('Forbidden: You are not a participant in this message thread');
+      }
+    } else if (readerRole === 'doctor') {
+      if (thread.doctor_id !== readerUid) {
+        throw new Error('Forbidden: You are not a participant in this message thread');
+      }
+    } else {
+      throw new Error('Forbidden: Role not authorized for message threads');
+    }
 
     const updates: Record<string, any> = {
       updated_at: new Date().toISOString(),
     };
 
-    if (readerRole === 'patient' && thread.patient_id === readerUid) {
+    if (readerRole === 'patient') {
       updates.patient_unread_count = 0;
-    } else if (readerRole === 'doctor' && thread.doctor_id === readerUid) {
+    } else if (readerRole === 'doctor') {
       updates.doctor_unread_count = 0;
     }
 

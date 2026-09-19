@@ -2,12 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate, Link } from 'react-router-dom';
 import { useDoctorAuth } from '../../context/DoctorAuthContext';
 import { supabase } from '../../lib/supabase';
-import {
-  MOCK_CONSULTATIONS,
-  MOCK_MESSAGE_THREADS,
-  MOCK_FOLLOW_UPS,
-  MOCK_NOTIFICATIONS,
-} from '../../data/doctorMockData';
 import { GlobalSearchModal } from './common/GlobalSearchModal';
 import {
   Home,
@@ -55,10 +49,45 @@ export default function DoctorPortalShell() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'clinical' | 'messages' | 'administrative'>('all');
-  const [notifications, setNotifications] = useState<any[]>(MOCK_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
   const [shiftStatus, setShiftStatus] = useState<'active' | 'break' | 'offline'>(
     doctor?.shiftStatus || 'active'
   );
+
+  const fetchLiveCounts = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        // 1. Fetch pending consultations count
+        const res = await fetch('/api/clinical/doctor/consultations', {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const consults = data.consultations || [];
+          const count = consults.filter(
+            (c: any) => c.status === 'pending_review' || c.status === 'submitted' || c.status === 'intake_completed'
+          ).length;
+          setPendingCount(count);
+        }
+
+        // 2. Fetch unread messages count
+        const msgRes = await fetch('/api/messages/threads', {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (msgRes.ok) {
+          const msgData = await msgRes.json();
+          const threads = msgData.threads || [];
+          const unreadCount = threads.filter((t: any) => t.unread || (t.doctorUnreadCount && t.doctorUnreadCount > 0)).length;
+          setUnreadMessagesCount(unreadCount);
+        }
+      }
+    } catch (err) {
+      console.warn('Counts fetch error:', err);
+    }
+  };
 
   const fetchLiveNotifications = async () => {
     try {
@@ -71,18 +100,17 @@ export default function DoctorPortalShell() {
         });
         if (res.ok) {
           const data = await res.json();
-          if (data.notifications && data.notifications.length > 0) {
-            const mapped = data.notifications.map((n: any) => ({
-              id: n.id,
-              title: n.title,
-              message: n.message,
-              timestamp: 'Just now',
-              isRead: n.read,
-              category: 'clinical',
-              link: n.action_url || '/doctor/work-queue',
-            }));
-            setNotifications(mapped);
-          }
+          const rawNotifications = data.notifications || [];
+          const mapped = rawNotifications.map((n: any) => ({
+            id: n.id,
+            title: n.title,
+            message: n.message || n.short_message,
+            timestamp: n.created_at ? new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
+            isRead: n.read ?? (n.status === 'read'),
+            category: n.related_entity_type === 'thread' || n.related_entity_type === 'message' ? 'messages' : 'clinical',
+            link: n.action_url || (n.related_entity_type === 'consultation' && n.related_entity_id ? `/doctor/consultations/${n.related_entity_id}` : '/doctor/work-queue'),
+          }));
+          setNotifications(mapped);
         }
       }
     } catch (err) {
@@ -92,6 +120,7 @@ export default function DoctorPortalShell() {
 
   useEffect(() => {
     fetchLiveNotifications();
+    fetchLiveCounts();
 
     const channel = supabase
       .channel('doctor-notifications-realtime')
@@ -102,6 +131,20 @@ export default function DoctorPortalShell() {
           fetchLiveNotifications();
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'consultations' },
+        () => {
+          fetchLiveCounts();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'messages' },
+        () => {
+          fetchLiveCounts();
+        }
+      )
       .subscribe();
 
     return () => {
@@ -109,10 +152,6 @@ export default function DoctorPortalShell() {
     };
   }, []);
 
-  // Dynamic badge numbers from mock & live datasets
-  const pendingCount = MOCK_CONSULTATIONS.filter((c) => c.status === 'pending_review').length;
-  const unreadMessagesCount = MOCK_MESSAGE_THREADS.filter((t) => t.unread).length;
-  const pendingFollowUpsCount = MOCK_FOLLOW_UPS.filter((f) => f.dueStatus === 'today' || f.dueStatus === 'overdue').length;
   const unreadNotifCount = notifications.filter((n) => !n.isRead).length;
 
   const NAV_GROUPS: NavGroup[] = [
@@ -145,8 +184,6 @@ export default function DoctorPortalShell() {
           name: 'Follow-up',
           path: '/doctor/follow-ups',
           icon: Clock,
-          badge: pendingFollowUpsCount > 0 ? pendingFollowUpsCount : undefined,
-          badgeVariant: 'normal',
         },
       ],
     },
@@ -359,9 +396,9 @@ export default function DoctorPortalShell() {
               />
               <div className="hidden xl:flex flex-col text-left">
                 <span className="text-xs font-semibold text-stone-900 leading-tight">
-                  {doctor?.name || 'Dr. Sarah Mitchell'}
+                  {doctor?.name || 'Clinician'}
                 </span>
-                <span className="text-3xs text-stone-500">{doctor?.credentials || 'MD, FACP'}</span>
+                <span className="text-3xs text-stone-500">{doctor?.credentials || ''}</span>
               </div>
               <ChevronDown className="hidden sm:block w-3.5 h-3.5 text-stone-400" />
             </button>
@@ -474,7 +511,7 @@ export default function DoctorPortalShell() {
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
               </div>
               <p className="text-stone-800 font-mono font-medium">
-                {doctor?.assignedJurisdiction.join(', ')}
+                {doctor?.assignedJurisdiction ? doctor.assignedJurisdiction.join(', ') : 'Authorized Jurisdictions'}
               </p>
               <p className="text-3xs text-stone-400">EPCS Compliant Workspace</p>
             </div>

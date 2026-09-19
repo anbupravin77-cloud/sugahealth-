@@ -81,10 +81,10 @@ BEGIN
 
   -- Seed staff profiles
   INSERT INTO public.staff_profiles (id, email, role, active, onboarding_status, specialties) VALUES
-    (v_doctor_a_id, 'doctora@sugahealth.com', 'doctor', true, 'approved', ARRAY['Endocrinology']),
-    (v_doctor_b_id, 'doctorb@sugahealth.com', 'doctor', true, 'approved', ARRAY['Metabolic Health']),
-    (v_pharmacist_id, 'pharmacy@sugahealth.com', 'pharmacist', true, 'approved', ARRAY['Compounding']),
-    (v_admin_id, 'admin@sugahealth.com', 'admin', true, 'approved', ARRAY['Operations'])
+    (v_doctor_a_id, 'doctora@sugahealth.com', 'doctor', true, 'completed', ARRAY['Endocrinology']),
+    (v_doctor_b_id, 'doctorb@sugahealth.com', 'doctor', true, 'completed', ARRAY['Metabolic Health']),
+    (v_pharmacist_id, 'pharmacy@sugahealth.com', 'pharmacist', true, 'completed', ARRAY['Compounding']),
+    (v_admin_id, 'admin@sugahealth.com', 'admin', true, 'completed', ARRAY['Operations'])
   ON CONFLICT (id) DO NOTHING;
 
   -- Seed Consultations

@@ -1,14 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "bunVersion": "1.4.x",
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api"
+      "destination": "https://sugahealth-api.onrender.com/api/$1"
     },
     {
       "source": "/api",
-      "destination": "/api"
+      "destination": "https://sugahealth-api.onrender.com/api"
     },
     {
       "source": "/((?!api/).*)",

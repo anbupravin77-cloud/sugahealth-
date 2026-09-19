@@ -1,12 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import {
-  getConsultationById,
-  getPatientById,
-  MOCK_CONSULTATIONS,
-  MOCK_PATIENTS,
-  Consultation as MockConsultation,
-} from '../../data/doctorMockData';
 import { StatusBadge } from '../../components/doctor/common/StatusBadge';
 import { PriorityIndicator } from '../../components/doctor/common/PriorityIndicator';
 import { useDoctorAuth } from '../../context/DoctorAuthContext';
@@ -48,9 +41,10 @@ export default function DoctorConsultationWorkspace() {
   const navigate = useNavigate();
   const { doctor } = useDoctorAuth();
 
-  // Consultation state (loaded from backend or mock fallback)
+  // Consultation state (loaded from live backend)
   const [loading, setLoading] = useState(true);
   const [consultationData, setConsultationData] = useState<any | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [notificationBanner, setNotificationBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Clinical SOAP & Assessment State
@@ -58,46 +52,17 @@ export default function DoctorConsultationWorkspace() {
   const [objective, setObjective] = useState('');
   const [assessment, setAssessment] = useState('');
   const [plan, setPlan] = useState('');
-  const [customClinicianMessage, setCustomClinicianMessage] = useState(
-    'Based on our clinical review of your health history and biometrics, the following medication options are approved for your treatment plan. Please select your preferred option to proceed.'
-  );
+  const [customClinicianMessage, setCustomClinicianMessage] = useState('');
 
-  // Medication Options Builder (Option 1, Option 2, Option 3)
-  const [medicationOptions, setMedicationOptions] = useState<MedicationOptionItem[]>([
-    {
-      id: 'opt_1',
-      name: 'Compounded Semaglutide Sublingual / SC',
-      strength: '0.25mg / week starter titration',
-      dosageForm: 'Sublingual Liquid / Injection',
-      priceInr: 6500,
-      description: 'Standard initial therapeutic dose for metabolic activation with once-weekly titration.',
-      isRecommended: true,
-    },
-    {
-      id: 'opt_2',
-      name: 'Compounded Tirzepatide (Dual GIP/GLP-1)',
-      strength: '2.5mg / week starter titration',
-      dosageForm: 'Subcutaneous Solution',
-      priceInr: 9500,
-      description: 'Dual agonist formulation for enhanced glycemic modulation and metabolic response.',
-      isRecommended: false,
-    },
-    {
-      id: 'opt_3',
-      name: 'Oral GLP-1 Support Formulation',
-      strength: '3mg daily oral dose',
-      dosageForm: 'Oral Capsule',
-      priceInr: 5200,
-      description: 'Oral non-injectable alternative formulation for daily maintenance.',
-      isRecommended: false,
-    },
-  ]);
+  // Medication Options Builder
+  const [medicationOptions, setMedicationOptions] = useState<MedicationOptionItem[]>([]);
 
   // Sign & Approve Dialog State
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [attestationChecked, setAttestationChecked] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isSavingNotes, setIsSavingNotes] = useState(false);
+  const [isClaiming, setIsClaiming] = useState(false);
 
   // Helper to fetch Supabase token
   const getDoctorToken = async (): Promise<string | null> => {
@@ -105,90 +70,98 @@ export default function DoctorConsultationWorkspace() {
     return session?.access_token || null;
   };
 
-  // Load consultation details on mount
-  useEffect(() => {
-    async function loadConsultation() {
-      setLoading(true);
-      const targetId = id || 'c-1082';
+  const loadConsultation = async () => {
+    if (!id) {
+      setLoadError('No consultation ID specified.');
+      setLoading(false);
+      return;
+    }
 
-      try {
-        const token = await getDoctorToken();
-        if (token && targetId.length > 10) {
-          const res = await fetch(`/api/clinical/consultations/${targetId}`, {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-            },
-          });
+    setLoading(true);
+    setLoadError(null);
 
-          if (res.ok) {
-            const data = await res.json();
-            setConsultationData(data);
-            if (data.medicationOptions?.options?.length > 0) {
-              setMedicationOptions(data.medicationOptions.options);
-            }
-            if (data.medicationOptions?.customClinicianMessage) {
-              setCustomClinicianMessage(data.medicationOptions.customClinicianMessage);
-            }
-            if (data.clinicalNotes?.length > 0) {
-              const latest = data.clinicalNotes[0];
-              setSubjective(latest.subjective || '');
-              setObjective(latest.objective || '');
-              setAssessment(latest.assessment || latest.content || '');
-              setPlan(latest.plan || '');
-            } else {
-              // Default SOAP notes
-              const c = data.consultation;
-              const responses = c?.responses || {};
-              setSubjective(`Patient presents for ${c?.primary_concern || 'telehealth evaluation'}. Denies acute contraindications.`);
-              setObjective(`Reported Height: ${responses.height || 'N/A'} in, Weight: ${responses.weight || 'N/A'} lbs.`);
-              setAssessment(`Clinical evaluation indicates candidate is suitable for telehealth treatment under active monitoring.`);
-              setPlan(`1. Approve formulated therapeutic options.\n2. Advise hydration & nutritional adherence.\n3. Follow up in 30 days.`);
-            }
-            setLoading(false);
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('Backend load failed, falling back to mock consultation:', err);
+    try {
+      const token = await getDoctorToken();
+      if (!token) {
+        setLoadError('Doctor authentication required. Please sign in.');
+        setLoading(false);
+        return;
       }
 
-      // Mock Fallback
-      const mockConsult = getConsultationById(targetId) || MOCK_CONSULTATIONS[0];
-      const mockPatient = getPatientById(mockConsult.patientId) || MOCK_PATIENTS[0];
-      setConsultationData({
-        isMock: true,
-        consultation: {
-          id: mockConsult.id,
-          status: mockConsult.status,
-          primary_concern: mockConsult.category,
-          responses: {
-            fullName: mockConsult.patientName,
-            height: mockPatient.vitalsHistory[0]?.heightInches || 68,
-            weight: mockPatient.vitalsHistory[0]?.weightLbs || 165,
-            sex: mockPatient.gender.toLowerCase(),
-            conditions: mockPatient.medicalHistory || [],
-            medications: mockPatient.currentMedicationsSummary || (mockPatient.medications?.map((m) => m.name).join(', ')) || 'None',
-            allergies: mockPatient.allergies?.join(', ') || 'None',
-          },
-        },
-        patient: {
-          id: mockPatient.id,
-          display_name: mockPatient.name,
-          email: mockPatient.email,
-          phone_number: mockPatient.phone,
-          sex: mockPatient.gender.toLowerCase(),
+      const res = await fetch(`/api/clinical/consultations/${id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
         },
       });
 
-      setSubjective(`Patient is a ${mockPatient.age}-year-old ${mockPatient.gender.toLowerCase()} presenting for ${mockConsult.category.toLowerCase()}. History reviewed.`);
-      setObjective(`Height: ${mockPatient.vitalsHistory[0]?.heightInches || 68} in, Weight: ${mockPatient.vitalsHistory[0]?.weightLbs || 165} lbs. BMI: ${mockPatient.vitalsHistory[0]?.bmi || 24.5}.`);
-      setAssessment(`Patient qualifies for clinical treatment protocol. No active contraindications.`);
-      setPlan(`1. Issue prescription options.\n2. Hydration & metabolic counseling.\n3. Follow up in 4 weeks.`);
+      if (res.ok) {
+        const data = await res.json();
+        setConsultationData(data);
+        if (data.medicationOptions?.options?.length > 0) {
+          setMedicationOptions(data.medicationOptions.options);
+        }
+        if (data.medicationOptions?.customClinicianMessage) {
+          setCustomClinicianMessage(data.medicationOptions.customClinicianMessage);
+        }
+        if (data.clinicalNotes?.length > 0) {
+          const latest = data.clinicalNotes[0];
+          setSubjective(latest.subjective || '');
+          setObjective(latest.objective || '');
+          setAssessment(latest.assessment || latest.content || '');
+          setPlan(latest.plan || '');
+        } else {
+          setSubjective('');
+          setObjective('');
+          setAssessment('');
+          setPlan('');
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setLoadError(errData.error || 'Failed to load clinical consultation record.');
+      }
+    } catch (err: any) {
+      console.error('Backend consultation load error:', err);
+      setLoadError(err.message || 'An unexpected error occurred while loading the consultation.');
+    } finally {
       setLoading(false);
     }
+  };
 
+  // Load consultation details on mount
+  useEffect(() => {
     loadConsultation();
   }, [id]);
+
+  const handleClaimConsultation = async () => {
+    setIsClaiming(true);
+    try {
+      const token = await getDoctorToken();
+      const res = await fetch(`/api/clinical/consultations/${id}/claim`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to claim consultation');
+      }
+
+      await loadConsultation();
+      setNotificationBanner({
+        type: 'success',
+        message: 'Consultation claimed successfully. Full clinical record is now unlocked.',
+      });
+    } catch (err: any) {
+      setNotificationBanner({
+        type: 'error',
+        message: err.message || 'Failed to claim consultation.',
+      });
+    } finally {
+      setIsClaiming(false);
+    }
+  };
 
   const handleSaveNotes = async () => {
     setIsSavingNotes(true);
@@ -198,7 +171,7 @@ export default function DoctorConsultationWorkspace() {
       const token = await getDoctorToken();
       if (token && targetId && !consultationData.isMock) {
         // Save clinical note
-        await fetch(`/api/clinical/consultations/${targetId}/notes`, {
+        const resNote = await fetch(`/api/clinical/consultations/${targetId}/notes`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -212,8 +185,13 @@ export default function DoctorConsultationWorkspace() {
           }),
         });
 
+        if (!resNote.ok) {
+          const errData = await resNote.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to save clinical note');
+        }
+
         // Save prescription options
-        await fetch(`/api/clinical/consultations/${targetId}/prescription`, {
+        const resRx = await fetch(`/api/clinical/consultations/${targetId}/prescription`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -225,6 +203,11 @@ export default function DoctorConsultationWorkspace() {
             customClinicianMessage,
           }),
         });
+
+        if (!resRx.ok) {
+          const errData = await resRx.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to save prescription options');
+        }
       }
 
       setNotificationBanner({
@@ -252,8 +235,28 @@ export default function DoctorConsultationWorkspace() {
       const token = await getDoctorToken();
 
       if (token && targetId && !consultationData.isMock) {
-        // Save prescription options first
-        await fetch(`/api/clinical/consultations/${targetId}/prescription`, {
+        // Save clinical notes first
+        const resNote = await fetch(`/api/clinical/consultations/${targetId}/notes`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            subjective,
+            objective,
+            assessment,
+            plan,
+          }),
+        });
+
+        if (!resNote.ok) {
+          const errData = await resNote.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to save clinical notes prior to approval');
+        }
+
+        // Save prescription options
+        const resRx = await fetch(`/api/clinical/consultations/${targetId}/prescription`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -265,6 +268,11 @@ export default function DoctorConsultationWorkspace() {
             customClinicianMessage,
           }),
         });
+
+        if (!resRx.ok) {
+          const errData = await resRx.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to save prescription options prior to approval');
+        }
 
         // Approve consultation
         const res = await fetch(`/api/clinical/consultations/${targetId}/approve`, {
@@ -280,7 +288,7 @@ export default function DoctorConsultationWorkspace() {
         });
 
         if (!res.ok) {
-          const errData = await res.json();
+          const errData = await res.json().catch(() => ({}));
           throw new Error(errData.error || 'Failed to approve consultation');
         }
       }
@@ -296,7 +304,7 @@ export default function DoctorConsultationWorkspace() {
       setShowApprovalModal(false);
       setNotificationBanner({
         type: 'success',
-        message: 'Consultation approved and electronically signed. Patient notification dispatched.',
+        message: 'Consultation approved and patient notification dispatched.',
       });
     } catch (err: any) {
       console.error('Approval failed:', err);
@@ -318,15 +326,58 @@ export default function DoctorConsultationWorkspace() {
     );
   }
 
+  if (loadError || !consultationData) {
+    return (
+      <div className="p-8 max-w-xl mx-auto my-12 bg-white rounded-xl border border-stone-200 shadow-sm text-center">
+        <AlertCircle className="w-10 h-10 text-amber-600 mx-auto mb-3" />
+        <h2 className="text-base font-bold text-stone-900 mb-1">Consultation Unavailable</h2>
+        <p className="text-xs text-stone-600 mb-6">{loadError || 'The requested clinical consultation could not be found or you do not have permission to view it.'}</p>
+        <Link
+          to="/doctor/work-queue"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-stone-900 hover:bg-stone-800 text-white text-xs font-semibold transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Return to Work Queue</span>
+        </Link>
+      </div>
+    );
+  }
+
   const c = consultationData?.consultation || {};
   const responses = c?.responses || {};
   const patient = consultationData?.patient || {};
   const isCompleted = c.status === 'completed';
 
-  // Calculate BMI
-  const heightInches = Number(responses.height) || 68;
-  const weightLbs = Number(responses.weight) || 165;
-  const bmi = ((weightLbs / (heightInches * heightInches)) * 703).toFixed(1);
+  // Calculate BMI (Height in cm, Weight in kg)
+  const rawHeight = Number(responses.height);
+  const rawWeight = Number(responses.weight);
+  const heightCm = !isNaN(rawHeight) && rawHeight > 0 ? rawHeight : null;
+  const weightKg = !isNaN(rawWeight) && rawWeight > 0 ? rawWeight : null;
+
+  let bmiDisplay = 'Not available';
+  if (heightCm && weightKg) {
+    const bmiVal = weightKg / Math.pow(heightCm / 100, 2);
+    if (!isNaN(bmiVal) && isFinite(bmiVal) && bmiVal > 0) {
+      bmiDisplay = bmiVal.toFixed(1);
+    }
+  }
+
+  const handleAddMedicationOption = () => {
+    const newOpt: MedicationOptionItem = {
+      id: `opt_${Date.now()}`,
+      name: '',
+      strength: '',
+      dosageForm: 'Oral / Injection',
+      priceInr: 0,
+      description: '',
+      isRecommended: medicationOptions.length === 0,
+    };
+    setMedicationOptions((prev) => [...prev, newOpt]);
+  };
+
+  const handleRemoveMedicationOption = (index: number) => {
+    setMedicationOptions((prev) => prev.filter((_, i) => i !== index));
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-150">
@@ -358,7 +409,17 @@ export default function DoctorConsultationWorkspace() {
         <div className="flex items-center gap-3">
           <StatusBadge status={isCompleted ? 'completed' : (c.status || 'in_review')} />
 
-          {!isCompleted ? (
+          {consultationData.isTriageOnly ? (
+            <button
+              type="button"
+              onClick={handleClaimConsultation}
+              disabled={isClaiming}
+              className="px-4 py-2 rounded-lg bg-stone-900 hover:bg-stone-800 text-white text-xs font-semibold flex items-center gap-2 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+            >
+              {isClaiming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Stethoscope className="w-3.5 h-3.5 text-emerald-400" />}
+              <span>Claim Consultation</span>
+            </button>
+          ) : !isCompleted ? (
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -382,11 +443,35 @@ export default function DoctorConsultationWorkspace() {
           ) : (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-2xs font-semibold">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
-              Signed & Finalized
+              Clinical Review Complete
             </span>
           )}
         </div>
       </div>
+
+      {/* Triage Claim Notice */}
+      {consultationData.isTriageOnly && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900">
+          <div className="flex items-start sm:items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
+            <div>
+              <p className="font-bold">Unassigned Consultation (Triage Mode)</p>
+              <p className="text-2xs text-amber-800">
+                You are viewing preliminary triage metadata. Claim this consultation to assign it to yourself and unlock the full medical record, SOAP charting, and prescription options.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleClaimConsultation}
+            disabled={isClaiming}
+            className="px-4 py-2 rounded-xl bg-amber-900 hover:bg-amber-950 text-white text-xs font-bold shrink-0 flex items-center justify-center gap-1.5 transition-colors"
+          >
+            {isClaiming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Stethoscope className="w-3.5 h-3.5" />}
+            <span>Claim Case Now</span>
+          </button>
+        </div>
+      )}
 
       {/* Notification Toast */}
       {notificationBanner && (
@@ -435,15 +520,15 @@ export default function DoctorConsultationWorkspace() {
               </div>
               <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/70">
                 <span className="text-3xs font-semibold uppercase text-stone-400 block">Height</span>
-                <span className="text-xs font-bold text-stone-900">{heightInches} in</span>
+                <span className="text-xs font-bold text-stone-900">{heightCm ? `${heightCm} cm` : 'Not available'}</span>
               </div>
               <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/70">
                 <span className="text-3xs font-semibold uppercase text-stone-400 block">Weight</span>
-                <span className="text-xs font-bold text-stone-900">{weightLbs} lbs</span>
+                <span className="text-xs font-bold text-stone-900">{weightKg ? `${weightKg} kg` : 'Not available'}</span>
               </div>
               <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/70">
                 <span className="text-3xs font-semibold uppercase text-stone-400 block">Calculated BMI</span>
-                <span className="text-xs font-bold text-stone-900">{bmi}</span>
+                <span className="text-xs font-bold text-stone-900">{bmiDisplay}</span>
               </div>
             </div>
 
@@ -571,74 +656,104 @@ export default function DoctorConsultationWorkspace() {
 
             {/* Structured Options List */}
             <div className="space-y-3 pt-1">
-              {medicationOptions.map((opt, index) => (
-                <div
-                  key={opt.id}
-                  className="p-3.5 rounded-xl border border-stone-200 bg-stone-50/70 space-y-2 relative"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-2xs font-bold uppercase tracking-wider text-stone-800">
-                      Option {index + 1} {opt.isRecommended && '• (Recommended)'}
-                    </span>
-                    <span className="text-xs font-bold text-stone-900 font-mono">
-                      ₹{opt.priceInr.toLocaleString('en-IN')}
-                    </span>
-                  </div>
+              {medicationOptions.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-stone-300 text-center space-y-2 my-2">
+                  <p className="text-xs font-semibold text-stone-600">No medication options added yet.</p>
+                  <p className="text-2xs text-stone-400">Add custom formulations or protocol options for patient evaluation.</p>
+                </div>
+              ) : (
+                medicationOptions.map((opt, index) => (
+                  <div
+                    key={opt.id}
+                    className="p-3.5 rounded-xl border border-stone-200 bg-stone-50/70 space-y-2 relative"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-2xs font-bold uppercase tracking-wider text-stone-800">
+                        Option {index + 1} {opt.isRecommended && '• (Recommended)'}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-stone-900 font-mono">
+                          ₹{opt.priceInr.toLocaleString('en-IN')}
+                        </span>
+                        {!isCompleted && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMedicationOption(index)}
+                            className="p-1 rounded text-stone-400 hover:text-rose-600 transition-colors"
+                            title="Remove option"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-                  <input
-                    type="text"
-                    value={opt.name}
-                    disabled={isCompleted}
-                    onChange={(e) => {
-                      const updated = [...medicationOptions];
-                      updated[index].name = e.target.value;
-                      setMedicationOptions(updated);
-                    }}
-                    className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-900 focus:outline-none"
-                    placeholder="Medication Name"
-                  />
-
-                  <div className="grid grid-cols-2 gap-2">
                     <input
                       type="text"
-                      value={opt.strength}
+                      value={opt.name}
                       disabled={isCompleted}
                       onChange={(e) => {
                         const updated = [...medicationOptions];
-                        updated[index].strength = e.target.value;
+                        updated[index].name = e.target.value;
                         setMedicationOptions(updated);
                       }}
-                      className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-2xs text-stone-800"
-                      placeholder="Strength (e.g. 0.25mg)"
+                      className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-900 focus:outline-none"
+                      placeholder="Medication Name"
                     />
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        value={opt.strength}
+                        disabled={isCompleted}
+                        onChange={(e) => {
+                          const updated = [...medicationOptions];
+                          updated[index].strength = e.target.value;
+                          setMedicationOptions(updated);
+                        }}
+                        className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-2xs text-stone-800"
+                        placeholder="Strength (e.g. 0.25mg)"
+                      />
+                      <input
+                        type="number"
+                        value={opt.priceInr}
+                        disabled={isCompleted}
+                        onChange={(e) => {
+                          const updated = [...medicationOptions];
+                          updated[index].priceInr = Number(e.target.value) || 0;
+                          setMedicationOptions(updated);
+                        }}
+                        className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-2xs text-stone-800"
+                        placeholder="Price in INR"
+                      />
+                    </div>
+
                     <input
-                      type="number"
-                      value={opt.priceInr}
+                      type="text"
+                      value={opt.description}
                       disabled={isCompleted}
                       onChange={(e) => {
                         const updated = [...medicationOptions];
-                        updated[index].priceInr = Number(e.target.value) || 0;
+                        updated[index].description = e.target.value;
                         setMedicationOptions(updated);
                       }}
-                      className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-2xs text-stone-800"
-                      placeholder="Price in INR"
+                      className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1 text-2xs text-stone-600"
+                      placeholder="Brief clinical description"
                     />
                   </div>
+                ))
+              )}
 
-                  <input
-                    type="text"
-                    value={opt.description}
-                    disabled={isCompleted}
-                    onChange={(e) => {
-                      const updated = [...medicationOptions];
-                      updated[index].description = e.target.value;
-                      setMedicationOptions(updated);
-                    }}
-                    className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1 text-2xs text-stone-600"
-                    placeholder="Brief clinical description"
-                  />
-                </div>
-              ))}
+              {!isCompleted && (
+                <button
+                  type="button"
+                  onClick={handleAddMedicationOption}
+                  className="w-full py-2 px-3 rounded-xl border border-dashed border-stone-300 hover:border-stone-400 text-stone-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Medication Option</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -652,10 +767,10 @@ export default function DoctorConsultationWorkspace() {
               <ShieldCheck className="w-6 h-6 text-emerald-700" />
               <div>
                 <h3 className="text-base font-bold text-stone-900 font-sans">
-                  Clinical Approval & Electronic Sign-off
+                  Clinical Approval & Attestation
                 </h3>
                 <p className="text-2xs text-stone-500">
-                  Verify prescription parameters before signing and dispatching patient notification.
+                  Verify prescription parameters before approving and dispatching patient notification.
                 </p>
               </div>
             </div>
@@ -674,9 +789,9 @@ export default function DoctorConsultationWorkspace() {
                 <span className="font-bold text-stone-900">{medicationOptions.length} Formulations</span>
               </div>
               <div className="space-y-1 pt-1">
-                <span className="text-stone-500 block">Electronic Signature Placeholder:</span>
+                <span className="text-stone-500 block">Attestation Status:</span>
                 <span className="text-2xs font-mono bg-stone-200/80 px-2 py-1 rounded text-stone-800 block">
-                  Electronic signature integration pending provider configuration
+                  Clinician attestation recorded. Digital signature integration pending.
                 </span>
               </div>
             </div>
@@ -712,12 +827,12 @@ export default function DoctorConsultationWorkspace() {
                 {isApproving ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    <span>Signing & Dispatching...</span>
+                    <span>Approving & Dispatching...</span>
                   </>
                 ) : (
                   <>
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Confirm & Electronically Sign</span>
+                    <span>Confirm & Approve Consultation</span>
                   </>
                 )}
               </button>

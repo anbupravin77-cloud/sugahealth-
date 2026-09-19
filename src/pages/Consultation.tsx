@@ -36,6 +36,8 @@ export default function Consultation() {
   const [isSelectingOption, setIsSelectingOption] = useState(false);
   const [pharmacyStatus, setPharmacyStatus] = useState<string | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [explicitError, setExplicitError] = useState<string | null>(null);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -69,19 +71,82 @@ export default function Consultation() {
     return null;
   };
 
-  // Auto-load draft or active consultation on mount
+  // Auto-load draft, active consultation, or deep-linked completed consultation
   useEffect(() => {
     async function loadConsultationData() {
       const token = await getAccessToken();
       if (!token) return;
 
       try {
-        const res = await fetch('/api/clinical/consultations/draft', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const headers = { 'Authorization': `Bearer ${token}` };
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlId = urlParams.get('id');
 
-        if (res.ok) {
-          const data = await res.json();
+        if (urlId) {
+          const res = await fetch(`/api/clinical/consultations/${urlId}`, { headers });
+          if (res.ok) {
+            const data = await res.json();
+            const c = data.consultation;
+            if (c) {
+              setDraftId(c.id);
+              if (c.status === 'completed') {
+                setApprovedConsultation(data);
+                if (data.selectedOption) {
+                  setSelectedMedOption(data.selectedOption);
+                }
+                setPharmacyStatus(data.selectionStatus || (data.selectedOption ? 'selected_pending_payment' : null));
+                return;
+              } else if (c.status === 'submitted' || c.status === 'under_review' || c.status === 'assigned') {
+                setSubmitted(true);
+                return;
+              }
+            }
+          } else if (res.status === 403) {
+            setExplicitError('403 Forbidden: You are not authorized to view this consultation record.');
+            return;
+          } else if (res.status === 404) {
+            setExplicitError('404 Not Found: The requested consultation record was not found.');
+            return;
+          } else {
+            const errJson = await res.json().catch(() => ({}));
+            setExplicitError(`${res.status} Error: ${errJson.error || 'Failed to load requested consultation.'}`);
+            return;
+          }
+        }
+
+        // Fetch patient consultations list
+        const listRes = await fetch('/api/clinical/consultations/patient', { headers });
+        if (listRes.ok) {
+          const listData = await listRes.json();
+          const consults = listData.consultations || [];
+          
+          const completedCons = consults.find((c: any) => c.status === 'completed');
+          if (completedCons) {
+            const detailRes = await fetch(`/api/clinical/consultations/${completedCons.id}`, { headers });
+            if (detailRes.ok) {
+              const data = await detailRes.json();
+              setApprovedConsultation(data);
+              setDraftId(completedCons.id);
+              if (data.selectedOption) {
+                setSelectedMedOption(data.selectedOption);
+              }
+              setPharmacyStatus(data.selectionStatus || (data.selectedOption ? 'selected_pending_payment' : null));
+              return;
+            }
+          }
+
+          const activeCons = consults.find((c: any) => c.status === 'submitted' || c.status === 'under_review' || c.status === 'assigned');
+          if (activeCons) {
+            setSubmitted(true);
+            setDraftId(activeCons.id);
+            return;
+          }
+        }
+
+        // Fallback to draft
+        const draftRes = await fetch('/api/clinical/consultations/draft', { headers });
+        if (draftRes.ok) {
+          const data = await draftRes.json();
           if (data.draft) {
             setDraftId(data.draft.id);
             if (data.draft.responses) {
@@ -94,7 +159,7 @@ export default function Consultation() {
           }
         }
       } catch (err) {
-        console.warn('Draft load warning:', err);
+        console.warn('Consultation load warning:', err);
       }
     }
 
@@ -255,6 +320,7 @@ export default function Consultation() {
   const handleSelectOption = async (option: MedicationOption) => {
     if (!draftId) return;
     setIsSelectingOption(true);
+    setSelectionError(null);
     try {
       const token = await getAccessToken();
       const res = await fetch(`/api/clinical/consultations/${draftId}/select-option`, {
@@ -263,15 +329,31 @@ export default function Consultation() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ selectedOption: option }),
+        body: JSON.stringify({ prescriptionItemId: option.id }),
       });
 
       if (res.ok) {
         setSelectedMedOption(option);
-        setPharmacyStatus('ready_for_pharmacy');
+        setPharmacyStatus('selected_pending_payment');
+
+        // Re-fetch canonical consultation detail
+        const detailRes = await fetch(`/api/clinical/consultations/${draftId}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (detailRes.ok) {
+          const updatedData = await detailRes.json();
+          setApprovedConsultation(updatedData);
+          if (updatedData.selectedOption) {
+            setSelectedMedOption(updatedData.selectedOption);
+          }
+        }
+      } else {
+        const errData = await res.json().catch(() => ({ error: 'Failed to select medication option' }));
+        setSelectionError(errData.error || 'Failed to select medication option');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error selecting option:', err);
+      setSelectionError(err.message || 'Network error selecting option');
     } finally {
       setIsSelectingOption(false);
     }
@@ -341,8 +423,23 @@ export default function Consultation() {
       {/* Main Content Area */}
       <main className="flex-grow flex items-center justify-center py-8 sm:py-12 px-4 sm:px-6 lg:px-8">
         <div className="w-full max-w-2xl">
+          {/* Explicit Error View */}
+          {explicitError && (
+            <div className="bg-white rounded-3xl border border-red-200 p-8 shadow-xs text-center space-y-4">
+              <AlertCircle className="w-10 h-10 text-red-500 mx-auto" />
+              <h2 className="text-lg font-bold text-stone-900">Consultation Access Error</h2>
+              <p className="text-xs text-stone-600 max-w-md mx-auto">{explicitError}</p>
+              <Link
+                to="/account"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800 transition-colors"
+              >
+                &larr; Return to Patient Portal
+              </Link>
+            </div>
+          )}
+
           {/* Approved Consultation & Prescription Options View */}
-          {approvedConsultation && (
+          {!explicitError && approvedConsultation && (
             <div className="bg-white rounded-3xl border border-neutral-200 p-6 sm:p-10 shadow-xs space-y-6">
               <div className="flex items-center justify-between pb-4 border-b border-neutral-100">
                 <div className="space-y-1">
@@ -352,18 +449,26 @@ export default function Consultation() {
                   </span>
                   <h2 className="text-2xl font-bold text-neutral-950">Clinical Treatment Plan</h2>
                 </div>
-                {pharmacyStatus === 'ready_for_pharmacy' && (
-                  <span className="px-3 py-1 bg-stone-900 text-white rounded-full text-xs font-semibold">
-                    Ready for Pharmacy
+                {(approvedConsultation.selectedOption || selectedMedOption) && (
+                  <span className="px-3 py-1 bg-stone-100 text-stone-900 border border-stone-300 rounded-full text-xs font-semibold">
+                    Selection saved — payment required
                   </span>
                 )}
               </div>
 
               {/* Clinician Message */}
-              {approvedConsultation.customClinicianMessage && (
+              {(approvedConsultation.medicationOptions?.customClinicianMessage || approvedConsultation.customClinicianMessage) && (
                 <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 text-xs text-stone-700 leading-relaxed space-y-1">
                   <span className="font-semibold text-stone-950 block">Physician Clinical Note:</span>
-                  <p>{approvedConsultation.customClinicianMessage}</p>
+                  <p>{approvedConsultation.medicationOptions?.customClinicianMessage || approvedConsultation.customClinicianMessage}</p>
+                </div>
+              )}
+
+              {/* Selection Error Banner */}
+              {selectionError && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                  <span>{selectionError}</span>
                 </div>
               )}
 
@@ -377,7 +482,9 @@ export default function Consultation() {
                 </p>
 
                 <div className="grid grid-cols-1 gap-3 pt-2">
-                  {(approvedConsultation.medicationOptions?.options || []).map((opt: MedicationOption) => {
+                  {[...(approvedConsultation.medicationOptions?.options || [])]
+                    .sort((a: MedicationOption, b: MedicationOption) => (b.priceInr || 0) - (a.priceInr || 0))
+                    .map((opt: MedicationOption) => {
                     const isSelected = selectedMedOption?.id === opt.id || approvedConsultation.selectedOption?.id === opt.id;
                     return (
                       <div
@@ -866,7 +973,7 @@ export default function Consultation() {
             <div className="space-y-1">
               <h3 className="text-lg font-bold text-neutral-950">Payment Integration</h3>
               <p className="text-xs text-neutral-600 leading-relaxed">
-                Payment integration will be enabled in a later phase. Your prescription choice has been safely recorded and your consultation is marked <strong>Ready for Pharmacy</strong>.
+                Payment integration will be enabled in a later phase.
               </p>
             </div>
             <button

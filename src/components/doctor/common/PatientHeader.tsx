@@ -1,6 +1,5 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Patient } from '../../../data/doctorMockData';
 import { StatusBadge } from './StatusBadge';
 import {
   AlertTriangle,
@@ -15,6 +14,23 @@ import {
   User,
   ShieldAlert,
 } from 'lucide-react';
+
+export interface Patient {
+  id: string;
+  mrn: string;
+  name: string;
+  age: number | string;
+  gender: string;
+  dob: string;
+  state: string;
+  city: string;
+  phone: string;
+  email: string;
+  allergies: string[];
+  primaryConcern: string;
+  careCategory: string;
+  careStatus: string;
+}
 
 interface PatientHeaderProps {
   patient: Patient;
