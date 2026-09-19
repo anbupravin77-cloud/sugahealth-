@@ -22,7 +22,15 @@ export function ProtectedRoute({ allowedRoles, requireOnboarding = true }: Prote
     return <Navigate to="/login" replace />;
   }
 
+  // If a clinician/doctor accidentally visits patient account, route them to doctor portal
+  if (profile.role === 'doctor' && !allowedRoles) {
+    return <Navigate to="/doctor" replace />;
+  }
+
   if (allowedRoles && !allowedRoles.includes(profile.role)) {
+    if (profile.role === 'doctor') {
+      return <Navigate to="/doctor" replace />;
+    }
     return <Navigate to="/" replace />;
   }
 

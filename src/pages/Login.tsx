@@ -1,11 +1,13 @@
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { signInWithPopup, signInWithPhoneNumber, RecaptchaVerifier, ConfirmationResult } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
 import { signInWithGoogle, signInWithEmail } from '../lib/supabaseAuth';
+import { useAuth } from '../context/AuthContext';
 import { Loader2, Mail, Phone, Smartphone, Lock } from 'lucide-react';
 
 export default function Login() {
+  const { user, profile, loading: authLoading } = useAuth();
   const [method, setMethod] = useState<'options' | 'phone' | 'email'>('options');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -15,6 +17,21 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
+
+  // If already authenticated, redirect to appropriate role portal
+  useEffect(() => {
+    if (!authLoading && user && profile) {
+      if (profile.role === 'doctor') {
+        navigate('/doctor', { replace: true });
+      } else if (profile.role === 'pharmacist') {
+        navigate('/pharmacist', { replace: true });
+      } else if (profile.role === 'admin') {
+        navigate('/admin', { replace: true });
+      } else {
+        navigate('/account', { replace: true });
+      }
+    }
+  }, [user, profile, authLoading, navigate]);
 
   const handleGoogleLogin = async () => {
     try {

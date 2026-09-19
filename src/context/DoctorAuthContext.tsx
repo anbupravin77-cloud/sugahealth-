@@ -102,7 +102,7 @@ export function DoctorAuthProvider({ children }: { children: ReactNode }) {
 
     // Listen to Supabase auth state change
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session) {
+      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') && session) {
         syncSession();
       } else if (event === 'SIGNED_OUT') {
         setIsAuthenticated(false);
