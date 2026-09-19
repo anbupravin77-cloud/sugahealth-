@@ -1,6 +1,15 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useAuth, StaffProfile } from '../../../context/AuthContext';
-import { Loader2, UserPlus, Shield, CheckCircle2, XCircle, Mail } from 'lucide-react';
+import { supabase } from '../../../lib/supabase';
+import { Loader2, UserPlus, Shield, CheckCircle2, Mail, Check } from 'lucide-react';
+
+const CLINICAL_SPECIALTY_OPTIONS = [
+  'Medical Weight Loss',
+  'Hair Regrowth',
+  'Sexual Health',
+  'Longevity & Performance',
+  'Primary / General Medicine'
+];
 
 export function StaffTab() {
   const { user } = useAuth();
@@ -13,17 +22,30 @@ export function StaffTab() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [role, setRole] = useState<'doctor' | 'pharmacist' | 'admin'>('doctor');
-  const [specialties, setSpecialties] = useState('');
+  const [selectedSpecialties, setSelectedSpecialties] = useState<string[]>([]);
   
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [setupLink, setSetupLink] = useState('');
 
-  const fetchStaff = async () => {
-    if (!user) return;
+  const getAuthToken = async () => {
     try {
-      const token = await user.getIdToken();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user) {
+      try {
+        return await user.getIdToken();
+      } catch {}
+    }
+    return null;
+  };
+
+  const fetchStaff = async () => {
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
       const res = await fetch('/api/admin/staff', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -42,9 +64,14 @@ export function StaffTab() {
     fetchStaff();
   }, [user]);
 
+  const toggleSpecialty = (spec: string) => {
+    setSelectedSpecialties(prev => 
+      prev.includes(spec) ? prev.filter(s => s !== spec) : [...prev, spec]
+    );
+  };
+
   const handleCreateStaff = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user) return;
     
     setSubmitting(true);
     setError('');
@@ -52,7 +79,9 @@ export function StaffTab() {
     setSetupLink('');
     
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
+      if (!token) throw new Error('Authentication session required');
+
       const res = await fetch('/api/admin/staff', {
         method: 'POST',
         headers: {
@@ -60,39 +89,39 @@ export function StaffTab() {
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
-          email,
-          firstName,
-          lastName,
+          email: email.trim(),
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
           role,
-          specialties: role === 'doctor' ? specialties.split(',').map(s => s.trim()).filter(Boolean) : null
+          specialties: role === 'doctor' ? selectedSpecialties : null
         })
       });
       
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to create staff');
       
       setSuccess('Staff account provisioned successfully.');
-      setSetupLink(data.setupLink);
+      setSetupLink(data.setupLink || '');
       
       // Reset form
       setEmail('');
       setFirstName('');
       setLastName('');
-      setSpecialties('');
+      setSelectedSpecialties([]);
       setShowCreate(false);
       
       fetchStaff();
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to provision staff account');
     } finally {
       setSubmitting(false);
     }
   };
 
   const toggleStatus = async (uid: string, currentActive: boolean) => {
-    if (!user) return;
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
+      if (!token) return;
       const res = await fetch(`/api/admin/staff/${uid}/status`, {
         method: 'PATCH',
         headers: {
@@ -146,7 +175,7 @@ export function StaffTab() {
           </div>
           {setupLink && (
             <div className="mt-2 bg-white p-3 rounded border border-emerald-200">
-              <p className="text-xs text-neutral-500 mb-1 font-semibold uppercase tracking-wider">Secure Setup Link (Send to staff member):</p>
+              <p className="text-xs text-neutral-500 mb-1 font-semibold uppercase tracking-wider">Secure Access Link:</p>
               <div className="flex items-center gap-2">
                 <code className="text-xs break-all bg-neutral-50 px-2 py-1 rounded border border-neutral-100 flex-1">
                   {setupLink}
@@ -158,9 +187,6 @@ export function StaffTab() {
                   Copy
                 </button>
               </div>
-              <p className="text-[11px] text-neutral-400 mt-2">
-                This link acts as an email password reset flow, allowing the staff member to set their private credentials.
-              </p>
             </div>
           )}
         </div>
@@ -178,7 +204,8 @@ export function StaffTab() {
                   required
                   value={firstName}
                   onChange={e => setFirstName(e.target.value)}
-                  className="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:border-neutral-950"
+                  placeholder="e.g. Priya"
+                  className="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:border-neutral-950 bg-white"
                 />
               </div>
               <div>
@@ -188,7 +215,8 @@ export function StaffTab() {
                   required
                   value={lastName}
                   onChange={e => setLastName(e.target.value)}
-                  className="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:border-neutral-950"
+                  placeholder="e.g. Sharma"
+                  className="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:border-neutral-950 bg-white"
                 />
               </div>
               <div>
@@ -198,7 +226,8 @@ export function StaffTab() {
                   required
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  className="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:border-neutral-950"
+                  placeholder="doctor@suga.health"
+                  className="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:border-neutral-950 bg-white"
                 />
               </div>
               <div>
@@ -216,15 +245,34 @@ export function StaffTab() {
             </div>
             
             {role === 'doctor' && (
-              <div>
-                <label className="block text-xs font-medium text-neutral-700 mb-1">Clinical Specialties (comma-separated)</label>
-                <input
-                  type="text"
-                  value={specialties}
-                  onChange={e => setSpecialties(e.target.value)}
-                  placeholder="e.g. Weight Loss, Men's Health"
-                  className="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:border-neutral-950"
-                />
+              <div className="pt-2">
+                <label className="block text-xs font-medium text-neutral-700 mb-2">
+                  Clinical Specialties (Select all that apply)
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-white p-3 rounded-lg border border-neutral-200">
+                  {CLINICAL_SPECIALTY_OPTIONS.map((spec) => {
+                    const isSelected = selectedSpecialties.includes(spec);
+                    return (
+                      <button
+                        key={spec}
+                        type="button"
+                        onClick={() => toggleSpecialty(spec)}
+                        className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium text-left transition-colors ${
+                          isSelected 
+                            ? 'bg-neutral-900 text-white' 
+                            : 'bg-neutral-50 text-neutral-700 hover:bg-neutral-100 border border-neutral-200'
+                        }`}
+                      >
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                          isSelected ? 'bg-white border-white text-neutral-900' : 'border-neutral-300 bg-white'
+                        }`}>
+                          {isSelected && <Check size={12} strokeWidth={3} />}
+                        </div>
+                        <span>{spec}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -262,10 +310,10 @@ export function StaffTab() {
                 </tr>
               ) : (
                 staff.map((s) => (
-                  <tr key={s.uid} className="hover:bg-neutral-50/50">
+                  <tr key={s.uid || s.id} className="hover:bg-neutral-50/50">
                     <td className="px-6 py-4">
                       <div className="font-semibold text-neutral-900">
-                        {s.firstName || s.lastName ? `${s.firstName} ${s.lastName}` : 'Pending Name'}
+                        {s.displayName || (s.firstName || s.lastName ? `${s.firstName || ''} ${s.lastName || ''}`.trim() : 'Staff Member')}
                       </div>
                       <div className="text-xs text-neutral-500 flex items-center gap-1 mt-0.5">
                         <Mail size={12} /> {s.email}
@@ -277,7 +325,7 @@ export function StaffTab() {
                         <span className="capitalize font-medium">{s.role}</span>
                       </div>
                       {s.specialties && s.specialties.length > 0 && (
-                        <div className="text-[10px] text-neutral-500 mt-1 w-32 truncate" title={s.specialties.join(', ')}>
+                        <div className="text-[10px] text-neutral-500 mt-1 max-w-xs truncate" title={s.specialties.join(', ')}>
                           {s.specialties.join(', ')}
                         </div>
                       )}
@@ -302,7 +350,7 @@ export function StaffTab() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button
-                        onClick={() => toggleStatus(s.uid, s.active)}
+                        onClick={() => toggleStatus(s.uid || s.id, s.active)}
                         className={`text-xs font-semibold px-3 py-1.5 rounded-md ${
                           s.active 
                             ? 'text-red-600 hover:bg-red-50' 

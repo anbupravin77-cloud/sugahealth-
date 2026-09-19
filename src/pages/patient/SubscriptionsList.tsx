@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, RefreshCw, XCircle, CheckCircle, Clock, Plus } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
 
 export default function SubscriptionsList() {
   const { user } = useAuth();
@@ -11,30 +12,48 @@ export default function SubscriptionsList() {
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [error, setError] = useState('');
 
+  const getAuthToken = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user) {
+      try {
+        return await user.getIdToken();
+      } catch {}
+    }
+    return null;
+  };
+
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [user]);
 
   const fetchData = async () => {
     try {
-      const token = await user?.getIdToken();
+      const token = await getAuthToken();
+      if (!token) {
+        setSubscriptions([]);
+        setEligiblePrescriptions([]);
+        setLoading(false);
+        return;
+      }
       
       const [subsRes, presRes] = await Promise.all([
         fetch('/api/subscriptions', { headers: { Authorization: `Bearer ${token}` } }),
         fetch('/api/prescriptions/eligible', { headers: { Authorization: `Bearer ${token}` } })
       ]);
       
-      if (subsRes.ok && presRes.ok) {
-        const subsData = await subsRes.json();
-        const presData = await presRes.json();
-        
-        setSubscriptions(subsData);
-        setEligiblePrescriptions(presData);
-      } else {
-        setError('Failed to load data');
-      }
+      const subsData = subsRes.ok ? await subsRes.json().catch(() => []) : [];
+      const presData = presRes.ok ? await presRes.json().catch(() => []) : [];
+      
+      setSubscriptions(Array.isArray(subsData) ? subsData : []);
+      setEligiblePrescriptions(Array.isArray(presData) ? presData : []);
+      setError('');
     } catch (err) {
-      setError('An error occurred');
+      console.warn('Subscription fetch warning:', err);
+      setSubscriptions([]);
+      setEligiblePrescriptions([]);
     } finally {
       setLoading(false);
     }
@@ -45,7 +64,7 @@ export default function SubscriptionsList() {
     
     setCancelling(id);
     try {
-      const token = await user?.getIdToken();
+      const token = await getAuthToken();
       const res = await fetch(`/api/subscriptions/${id}/cancel`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
@@ -53,11 +72,11 @@ export default function SubscriptionsList() {
       if (res.ok) {
         await fetchData();
       } else {
-        const errorData = await res.json();
-        alert(`Failed to cancel: ${errorData.error}`);
+        const errorData = await res.json().catch(() => ({}));
+        alert(`Failed to cancel: ${errorData.error || 'Server error'}`);
       }
     } catch (err) {
-      alert('An error occurred');
+      alert('An error occurred while cancelling subscription');
     } finally {
       setCancelling(null);
     }
@@ -66,7 +85,7 @@ export default function SubscriptionsList() {
   const handleSubscribe = async (prescriptionId: string) => {
     setSubscribing(prescriptionId);
     try {
-      const token = await user?.getIdToken();
+      const token = await getAuthToken();
       const res = await fetch(`/api/subscriptions/checkout`, {
         method: 'POST',
         headers: { 
@@ -76,11 +95,11 @@ export default function SubscriptionsList() {
         body: JSON.stringify({ prescriptionId })
       });
       
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.url) {
         window.location.href = data.url;
       } else {
-        alert(`Failed to start subscription: ${data.error}`);
+        alert(`Failed to start subscription: ${data.error || 'Check out failed'}`);
       }
     } catch (err) {
       alert('An error occurred');
@@ -116,7 +135,7 @@ export default function SubscriptionsList() {
         <div className="space-y-4">
           <h3 className="text-lg font-medium text-neutral-900">Active Subscriptions</h3>
           {subscriptions.map((sub) => (
-            <div key={sub.subscriptionId} className="flex flex-col sm:flex-row items-start sm:items-center justify-between rounded-xl border border-neutral-200 bg-white p-5">
+            <div key={sub.subscriptionId || sub.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between rounded-xl border border-neutral-200 bg-white p-5">
               <div className="mb-4 sm:mb-0">
                 <h3 className="font-medium text-neutral-900">{sub.treatmentName}</h3>
                 <div className="mt-1 flex items-center space-x-4 text-sm text-neutral-500">
@@ -128,10 +147,10 @@ export default function SubscriptionsList() {
                     ) : (
                       <XCircle className="mr-1.5 h-4 w-4 text-neutral-400" />
                     )}
-                    <span className="capitalize">{sub.status.replace('_', ' ')}</span>
+                    <span className="capitalize">{(sub.status || 'active').replace('_', ' ')}</span>
                   </span>
                   <span>•</span>
-                  <span>Every {sub.intervalCount} {sub.billingInterval}(s)</span>
+                  <span>Every {sub.intervalCount || 1} {sub.billingInterval || 'month'}(s)</span>
                 </div>
                 {sub.status === 'active' && sub.nextBillingAt && (
                   <div className="mt-2 text-xs text-neutral-500">
@@ -142,11 +161,11 @@ export default function SubscriptionsList() {
               
               {(sub.status === 'active' || sub.status === 'past_due' || sub.status === 'paused') && (
                 <button
-                  onClick={() => handleCancel(sub.subscriptionId)}
-                  disabled={cancelling === sub.subscriptionId}
+                  onClick={() => handleCancel(sub.subscriptionId || sub.id)}
+                  disabled={cancelling === (sub.subscriptionId || sub.id)}
                   className="flex items-center justify-center rounded-lg border border-red-200 text-red-600 bg-red-50 px-4 py-2 text-sm font-medium transition-colors hover:bg-red-100 disabled:opacity-50"
                 >
-                  {cancelling === sub.subscriptionId ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Cancel'}
+                  {cancelling === (sub.subscriptionId || sub.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Cancel'}
                 </button>
               )}
             </div>

@@ -35,12 +35,14 @@ export interface UserProfile {
 
 export interface StaffProfile {
   uid: string;
+  id?: string;
   email: string;
   role: UserRole;
   active: boolean;
   onboardingStatus: 'pending' | 'completed';
   firstName?: string | null;
   lastName?: string | null;
+  displayName?: string | null;
   initials?: string;
   phoneNumber?: string;
   specialties?: string[];
