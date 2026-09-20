@@ -149,11 +149,16 @@ export async function provisionDesignatedTestAccount(email: string, password: st
     }, { onConflict: 'id' });
 
   if (profileError) {
-    console.warn(`[TestAccounts] Warning syncing profiles for ${normalizedEmail}:`, profileError.message);
+    throw new Error(`Failed syncing public.profiles for ${normalizedEmail}: ${profileError.message}`);
   }
 
   // 3. Synchronize public.staff_profiles if staff role
   if (spec.defaultRole !== 'patient') {
+    const nameParts = spec.displayName.replace(/^Dr\.\s+/, '').split(' ');
+    const firstName = nameParts[0] || 'Staff';
+    const lastName = nameParts.slice(1).join(' ') || 'Member';
+    const initials = `${firstName[0] || 'S'}${lastName[0] || 'M'}`.toUpperCase();
+
     const { error: staffError } = await supabaseAdmin
       .from('staff_profiles')
       .upsert({
@@ -162,13 +167,15 @@ export async function provisionDesignatedTestAccount(email: string, password: st
         role: spec.defaultRole,
         active: true,
         onboarding_status: 'completed',
-        display_name: spec.displayName,
-        specialties: spec.specialties || [],
+        first_name: firstName,
+        last_name: lastName,
+        initials,
+        specialties: spec.specialties || ['General Medicine', 'Telehealth Consultation'],
         updated_at: new Date().toISOString(),
       }, { onConflict: 'id' });
 
     if (staffError) {
-      console.warn(`[TestAccounts] Warning syncing staff_profiles for ${normalizedEmail}:`, staffError.message);
+      throw new Error(`Failed syncing public.staff_profiles for ${normalizedEmail}: ${staffError.message}`);
     }
   }
 

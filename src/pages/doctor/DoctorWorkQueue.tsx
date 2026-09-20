@@ -99,7 +99,8 @@ export default function DoctorWorkQueue() {
       reasonForReview: responses.conditions?.join(', ') || 'Asynchronous clinical evaluation',
       chiefComplaint: responses.medicalHistory || 'Patient initiated telehealth intake.',
       triagePriority: 'normal' as const,
-      status: c.status === 'completed' ? 'completed' : c.status === 'under_review' ? 'in_review' : 'pending_review',
+      status: c.status,
+      assignedTo: c.assigned_to,
       submittedAt: c.submitted_at || c.created_at,
       waitTimeFormatted: 'Recent',
       isLive: true,
@@ -217,9 +218,11 @@ export default function DoctorWorkQueue() {
                 className="bg-stone-50 border border-stone-200 rounded-md px-2 py-1 text-xs text-stone-800"
               >
                 <option value="all">All Statuses</option>
-                <option value="pending_review">Pending Review</option>
-                <option value="in_review">In Review</option>
+                <option value="submitted">Pending Review</option>
+                <option value="assigned">Assigned</option>
+                <option value="under_review">In Review</option>
                 <option value="completed">Completed / Signed</option>
+                <option value="cancelled">Cancelled</option>
               </select>
             </div>
           </div>

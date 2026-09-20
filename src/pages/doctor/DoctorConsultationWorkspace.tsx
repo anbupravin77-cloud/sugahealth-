@@ -100,8 +100,8 @@ export default function DoctorConsultationWorkspace() {
         if (data.medicationOptions?.options?.length > 0) {
           setMedicationOptions(data.medicationOptions.options);
         }
-        if (data.medicationOptions?.customClinicianMessage) {
-          setCustomClinicianMessage(data.medicationOptions.customClinicianMessage);
+        if (data.clinicianMessage || data.medicationOptions?.customClinicianMessage) {
+          setCustomClinicianMessage(data.clinicianMessage || data.medicationOptions?.customClinicianMessage);
         }
         if (data.clinicalNotes?.length > 0) {
           const latest = data.clinicalNotes[0];
@@ -347,6 +347,7 @@ export default function DoctorConsultationWorkspace() {
   const responses = c?.responses || {};
   const patient = consultationData?.patient || {};
   const isCompleted = c.status === 'completed';
+  const isClaimable = consultationData.isClaimable || consultationData.isTriageOnly || (c.status === 'assigned' || c.status === 'submitted');
 
   // Calculate BMI (Height in cm, Weight in kg)
   const rawHeight = Number(responses.height);
@@ -409,7 +410,7 @@ export default function DoctorConsultationWorkspace() {
         <div className="flex items-center gap-3">
           <StatusBadge status={isCompleted ? 'completed' : (c.status || 'in_review')} />
 
-          {consultationData.isTriageOnly ? (
+          {isClaimable ? (
             <button
               type="button"
               onClick={handleClaimConsultation}
@@ -450,7 +451,7 @@ export default function DoctorConsultationWorkspace() {
       </div>
 
       {/* Triage Claim Notice */}
-      {consultationData.isTriageOnly && (
+      {isClaimable && (
         <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900">
           <div className="flex items-start sm:items-center gap-2.5">
             <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />

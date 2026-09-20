@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { SugaWebsiteContent } from '../types/content';
 import { defaultContent } from '../data/defaultContent';
-import { auth } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
 
 interface ContentContextValue {
   content: SugaWebsiteContent;
@@ -67,16 +67,29 @@ export function ContentProvider({ children }: { children: ReactNode } = { childr
   });
 
   useEffect(() => {
-    return auth.onIdTokenChanged(async (user) => {
-      if (user) {
-        const token = await user.getIdToken();
-        setAuthToken(token);
-        setCurrentUserEmail(user.email);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        setAuthToken(session.access_token);
+        setCurrentUserEmail(session.user.email || null);
       } else {
         setAuthToken(null);
         setCurrentUserEmail(null);
       }
     });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        setAuthToken(session.access_token);
+        setCurrentUserEmail(session.user.email || null);
+      } else {
+        setAuthToken(null);
+        setCurrentUserEmail(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Fetch published content for public website

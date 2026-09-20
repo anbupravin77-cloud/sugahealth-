@@ -87,6 +87,7 @@ try {
 // Normalized, server-controlled authentication & role authorization middleware
 import {
   requireAuth,
+  requireClinicalAuth,
   requireAdminAuth,
   requireDoctorAuth,
   requirePharmacistAuth,
@@ -122,7 +123,9 @@ const PORT = 3000;
 
   // Supabase Auth & Test accounts layer
   app.use('/api/auth', authRouter);
+  // CANONICAL API ROUTER MOUNT: /api/clinical (Patient + Doctor Clinical Workflows)
   app.use('/api/clinical', clinicalRouter);
+  // LEGACY ALIAS MOUNT: /api (Preserved strictly for legacy backward compatibility)
   app.use('/api', clinicalRouter);
 
   // Public: Get published content
@@ -2097,6 +2100,27 @@ const PORT = 3000;
       const uid = decodedToken.uid;
       const { firstName, lastName, dateOfBirth, sex, shippingAddress, phone, phoneNumber } = req.body;
 
+      // Helper for normalizing Indian mobile numbers server-side
+      const normalizePhone = (input: any): { normalized: string | null; isValid: boolean } => {
+        if (input === null || input === undefined || (typeof input === 'string' && !input.trim())) {
+          return { normalized: null, isValid: true };
+        }
+        if (typeof input !== 'string') {
+          return { normalized: null, isValid: false };
+        }
+        const raw = input.trim();
+        let digits = raw.replace(/\D/g, '');
+        if (digits.length === 12 && digits.startsWith('91')) {
+          digits = digits.slice(2);
+        } else if (digits.length === 11 && digits.startsWith('0')) {
+          digits = digits.slice(1);
+        }
+        if (digits.length === 10) {
+          return { normalized: `+91${digits}`, isValid: true };
+        }
+        return { normalized: null, isValid: false };
+      };
+
       // Build canonical Supabase profile updates
       const supabaseUpdates: Record<string, any> = {
         updated_at: new Date().toISOString(),
@@ -2128,11 +2152,28 @@ const PORT = 3000;
         const validSexes = ['male', 'female', 'other', 'prefer-not-to-say', ''];
         supabaseUpdates.sex = validSexes.includes(sex) ? sex : null;
       }
-      const rawPhone = phone !== undefined ? phone : phoneNumber;
-      if (rawPhone !== undefined) {
-        supabaseUpdates.phone_number = typeof rawPhone === 'string' ? rawPhone.trim() : null;
+
+      if ('phone' in req.body || 'phoneNumber' in req.body) {
+        const rawPhone = phone !== undefined ? phone : phoneNumber;
+        const { normalized, isValid } = normalizePhone(rawPhone);
+        if (!isValid) {
+          return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
+        }
+        supabaseUpdates.phone_number = normalized;
       }
+
       if (shippingAddress !== undefined && typeof shippingAddress === 'object' && shippingAddress !== null) {
+        let shippingPhone = shippingAddress.phoneNumber;
+        if (shippingPhone !== undefined) {
+          const { normalized, isValid } = normalizePhone(shippingPhone);
+          if (!isValid) {
+            return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
+          }
+          shippingPhone = normalized;
+        } else {
+          shippingPhone = supabaseUpdates.phone_number !== undefined ? supabaseUpdates.phone_number : null;
+        }
+
         supabaseUpdates.shipping_address = {
           recipientName: shippingAddress.recipientName || '',
           line1: shippingAddress.line1 || shippingAddress.street || '',
@@ -2141,7 +2182,7 @@ const PORT = 3000;
           state: shippingAddress.state || '',
           postalCode: shippingAddress.postalCode || shippingAddress.zip || '',
           country: shippingAddress.country || 'India',
-          phoneNumber: shippingAddress.phoneNumber || rawPhone || '',
+          phoneNumber: shippingPhone,
         };
       }
 
@@ -2233,7 +2274,7 @@ const PORT = 3000;
           if (lastName !== undefined) firestoreUpdates.lastName = typeof lastName === 'string' ? lastName.trim() : lastName;
           if (dateOfBirth !== undefined) firestoreUpdates.dateOfBirth = dateOfBirth;
           if (sex !== undefined) firestoreUpdates.sex = sex;
-          if (phone !== undefined || phoneNumber !== undefined) firestoreUpdates.phone = rawPhone;
+          if (phone !== undefined || phoneNumber !== undefined) firestoreUpdates.phone = supabaseUpdates.phone_number;
           if (shippingAddress !== undefined && typeof shippingAddress === 'object') {
             firestoreUpdates.shippingAddress = supabaseUpdates.shipping_address;
           }
@@ -2608,7 +2649,7 @@ const PORT = 3000;
 
 // -------------- MESSAGING -------------- //
 
-  app.post('/api/messages/threads/:threadId/send', requireAuth, async (req, res) => {
+  app.post('/api/messages/threads/:threadId/send', requireClinicalAuth, async (req, res) => {
     try {
       const { threadId } = req.params;
       const { text } = req.body;
@@ -2629,7 +2670,7 @@ const PORT = 3000;
     }
   });
 
-  app.post('/api/messages/threads/:threadId/read', requireAuth, async (req, res) => {
+  app.post('/api/messages/threads/:threadId/read', requireClinicalAuth, async (req, res) => {
     try {
       const { threadId } = req.params;
       const decodedToken = (req as any).user;

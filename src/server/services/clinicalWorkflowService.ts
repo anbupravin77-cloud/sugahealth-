@@ -139,105 +139,27 @@ export class ClinicalWorkflowService {
    * 4. Creates exactly ONE doctor notification in Supabase public.notifications.
    */
   async submitConsultation(consultationId: string, patientId: string): Promise<{ success: boolean; consultationId: string; assignedDoctorId?: string }> {
-    const timestamp = new Date().toISOString();
+    const testDoctorEmail = process.env.TEST_DOCTOR_EMAIL?.trim().toLowerCase() || null;
 
-    // 1. Fetch consultation
-    const { data: consultation, error: fetchErr } = await supabaseAdmin
-      .from('consultations')
-      .select('*')
-      .eq('id', consultationId)
-      .maybeSingle();
+    // Execute atomic Postgres RPC exclusively
+    const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('fn_submit_consultation', {
+      p_consultation_id: consultationId,
+      p_patient_id: patientId,
+      p_test_doctor_email: testDoctorEmail,
+    });
 
-    if (fetchErr || !consultation) {
-      throw new Error('Consultation not found.');
-    }
-    if (consultation.patient_id !== patientId) {
-      throw new Error('Forbidden: You can only submit your own consultation.');
-    }
-    if (consultation.status !== 'draft') {
-      return { success: true, consultationId: consultation.id, assignedDoctorId: consultation.assigned_to };
+    if (rpcErr) {
+      throw new Error(`Failed to submit consultation: ${rpcErr.message}`);
     }
 
-    // 2. Resolve eligible doctor from staff_profiles
-    let assignedDoctorId: string | null = null;
-
-    // Check if test doctor is in staff_profiles
-    const testDoctorEmail = process.env.TEST_DOCTOR_EMAIL?.trim().toLowerCase();
-    if (testDoctorEmail) {
-      const { data: testDoc } = await supabaseAdmin
-        .from('staff_profiles')
-        .select('id')
-        .eq('email', testDoctorEmail)
-        .eq('active', true)
-        .maybeSingle();
-
-      if (testDoc?.id) {
-        assignedDoctorId = testDoc.id;
-      }
-    }
-
-    // If test doctor not matched, find any active doctor
-    if (!assignedDoctorId) {
-      const { data: anyDoctor } = await supabaseAdmin
-        .from('staff_profiles')
-        .select('id')
-        .eq('role', 'doctor')
-        .eq('active', true)
-        .limit(1)
-        .maybeSingle();
-
-      if (anyDoctor?.id) {
-        assignedDoctorId = anyDoctor.id;
-      }
-    }
-
-    // 3. Update consultation status
-    const nextStatus = assignedDoctorId ? 'assigned' : 'submitted';
-    const { error: updateErr } = await supabaseAdmin
-      .from('consultations')
-      .update({
-        status: nextStatus,
-        assigned_to: assignedDoctorId,
-        submitted_at: timestamp,
-        updated_at: timestamp,
-      })
-      .eq('id', consultationId);
-
-    if (updateErr) {
-      throw new Error(`Failed to submit consultation: ${updateErr.message}`);
-    }
-
-    // 4. Create doctor notification if assigned
-    if (assignedDoctorId) {
-      const notifId = `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      const idempotencyKey = `consultation_submit_${consultationId}`;
-      const patientName = consultation.responses?.fullName || 'Patient';
-      const concern = consultation.primary_concern || 'Intake';
-
-      const { error: notifErr } = await supabaseAdmin
-        .from('notifications')
-        .upsert({
-          id: notifId,
-          patient_id: assignedDoctorId, // Recipient is the doctor's user id
-          type: 'CONSULTATION_SUBMITTED',
-          title: 'New consultation requires review',
-          short_message: `New intake for ${patientName} (${concern}) is ready for clinician evaluation.`,
-          related_entity_id: consultationId,
-          related_entity_type: 'consultation',
-          status: 'unread',
-          idempotency_key: idempotencyKey,
-          created_at: timestamp,
-        }, { onConflict: 'idempotency_key' });
-
-      if (notifErr) {
-        console.warn('[ClinicalWorkflow] Warning creating doctor notification:', notifErr.message);
-      }
+    if (!rpcRes || !rpcRes.success) {
+      throw new Error('Failed to submit consultation: Transaction RPC returned unsuccessful status.');
     }
 
     return {
       success: true,
-      consultationId,
-      assignedDoctorId: assignedDoctorId || undefined,
+      consultationId: rpcRes.consultationId || consultationId,
+      assignedDoctorId: rpcRes.assignedDoctorId || undefined,
     };
   }
 
@@ -262,6 +184,7 @@ export class ClinicalWorkflowService {
     const isAssignedDoctor = Boolean(consultation.assigned_to && authUser.uid === consultation.assigned_to);
     const isDoctorRole = authUser.role === 'doctor';
     const isAdmin = authUser.role === 'admin';
+    const requesterRole = authUser.role;
 
     if (!isPatientOwner && !isAssignedDoctor && !isDoctorRole && !isAdmin) {
       throw new Error('Forbidden: You do not have permission to view this clinical consultation.');
@@ -315,10 +238,17 @@ export class ClinicalWorkflowService {
     if (consultation.assigned_to) {
       const { data: doc } = await supabaseAdmin
         .from('staff_profiles')
-        .select('id, email, display_name, first_name, last_name, initials, specialties')
+        .select('id, email, first_name, last_name, initials, specialties')
         .eq('id', consultation.assigned_to)
         .maybeSingle();
-      doctorProfile = doc;
+
+      if (doc) {
+        const displayName = `${doc.first_name || ''} ${doc.last_name || ''}`.trim() || doc.initials || 'Attending Physician';
+        doctorProfile = {
+          ...doc,
+          display_name: displayName,
+        };
+      }
     }
 
     // Fetch clinical notes
@@ -346,8 +276,10 @@ export class ClinicalWorkflowService {
       prescriptionItems = items || [];
     }
 
-    // Assemble canonical medication options from prescription_items
-    let canonicalMedicationOptions = consultation.responses?.medicationOptions || null;
+    // Assemble canonical medication options strictly from prescription_items
+    let canonicalMedicationOptions: any = null;
+    const customClinicianMessage = prescription?.clinician_message || 'These options correspond to your approved treatment plan.';
+
     if (prescriptionItems.length > 0) {
       const optionsList = prescriptionItems.map((item: any) => ({
         id: item.id,
@@ -361,8 +293,16 @@ export class ClinicalWorkflowService {
       optionsList.sort((a, b) => (b.priceInr || 0) - (a.priceInr || 0));
 
       canonicalMedicationOptions = {
+        prescriptionId: prescription?.id,
         options: optionsList,
-        customClinicianMessage: consultation.responses?.medicationOptions?.customClinicianMessage || 'These options correspond to your approved treatment plan.',
+        customClinicianMessage,
+        updatedAt: prescription?.updated_at || consultation.updated_at,
+      };
+    } else {
+      canonicalMedicationOptions = {
+        prescriptionId: prescription?.id || null,
+        options: [],
+        customClinicianMessage,
         updatedAt: prescription?.updated_at || consultation.updated_at,
       };
     }
@@ -386,61 +326,71 @@ export class ClinicalWorkflowService {
       }
     }
 
+    const isPatientRole = requesterRole === 'patient';
+
+    // If patient requesting non-completed consultation, sanitize response (no internal notes, no draft prescriptions)
+    if (isPatientRole && consultation.status !== 'completed') {
+      return {
+        consultation,
+        patient: patientProfile,
+        doctor: doctorProfile,
+        clinicalNotes: [],
+        prescription: null,
+        medicationOptions: null,
+        selectedOption: null,
+        selectionStatus: null,
+        pharmacyHandoffStatus: null,
+        signingStatus: null,
+        isTriageOnly: false,
+        isClaimable: false,
+      };
+    }
+
+    const clinicalSummary = notes && notes.length > 0 ? (notes[0].assessment || notes[0].plan || 'Treatment plan issued.') : 'Clinical evaluation complete.';
+
     return {
       consultation,
       patient: patientProfile,
       doctor: doctorProfile,
-      clinicalNotes: notes || [],
+      clinicalSummary,
+      clinicalNotes: isPatientRole ? [] : (notes || []),
       prescription: prescription ? { ...prescription, items: prescriptionItems } : null,
+      prescriptionItems,
       medicationOptions: canonicalMedicationOptions,
       selectedOption: selectedOptionDto,
       selectionStatus: selectedItemId ? 'selected_pending_payment' : null,
+      clinicianMessage: customClinicianMessage,
       pharmacyHandoffStatus: null,
       signingStatus: consultation.responses?.signing_status || (consultation.status === 'completed' ? 'ready_for_signature' : null),
       isTriageOnly: false,
-      isClaimable: false,
+      isClaimable: ['submitted', 'assigned'].includes(consultation.status) && (consultation.assigned_to === authUser.uid || !consultation.assigned_to),
     };
   }
 
   /**
-   * Explicitly claim an unassigned consultation for review.
+   * Explicitly claim an unassigned or assigned consultation for review.
    * Sets assigned_to = doctor.uid and status = 'under_review'.
-   * Disallows implicit claiming or hijacking.
+   * Uses fn_claim_consultation RPC.
    */
-  async claimConsultation(consultationId: string, doctorId: string): Promise<{ success: boolean; assignedTo: string; status: string }> {
-    const timestamp = new Date().toISOString();
+  async claimConsultation(consultationId: string, doctorId: string): Promise<{ success: boolean; assignedTo: string; status: string; alreadyClaimed?: boolean }> {
+    const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('fn_claim_consultation', {
+      p_consultation_id: consultationId,
+      p_doctor_id: doctorId,
+    });
 
-    const { data: consultation, error: fetchErr } = await supabaseAdmin
-      .from('consultations')
-      .select('id, assigned_to, status')
-      .eq('id', consultationId)
-      .maybeSingle();
-
-    if (fetchErr || !consultation) {
-      throw new Error('Consultation not found.');
+    if (rpcErr) {
+      throw new Error(`Failed to claim consultation: ${rpcErr.message}`);
     }
 
-    if (consultation.assigned_to && consultation.assigned_to !== doctorId) {
-      throw new Error('Forbidden: Consultation is already assigned to another clinician.');
-    }
-
-    const { error: upErr } = await supabaseAdmin
-      .from('consultations')
-      .update({
-        assigned_to: doctorId,
-        status: 'under_review',
-        updated_at: timestamp,
-      })
-      .eq('id', consultationId);
-
-    if (upErr) {
-      throw new Error(`Failed to claim consultation: ${upErr.message}`);
+    if (!rpcRes || !rpcRes.success) {
+      throw new Error('Failed to claim consultation: Transaction RPC returned unsuccessful status.');
     }
 
     return {
       success: true,
-      assignedTo: doctorId,
-      status: 'under_review',
+      assignedTo: rpcRes.assignedTo || doctorId,
+      status: rpcRes.status || 'under_review',
+      alreadyClaimed: Boolean(rpcRes.alreadyClaimed),
     };
   }
 
@@ -517,8 +467,8 @@ export class ClinicalWorkflowService {
       throw new Error('Forbidden: Consultation must be claimed and assigned to you before writing clinical notes.');
     }
 
-    if (consultation.status === 'completed') {
-      throw new Error('Forbidden: Consultation is finalized and clinical notes cannot be modified.');
+    if (consultation.status !== 'under_review') {
+      throw new Error(`Forbidden: Consultation must be under_review before writing clinical notes. Current status: ${consultation.status}`);
     }
 
     let targetNoteId = note.noteId;
@@ -642,111 +592,62 @@ export class ClinicalWorkflowService {
       throw new Error('Forbidden: Consultation must be claimed and assigned to you before prescribing medication.');
     }
 
-    if (consultation.status === 'completed') {
-      throw new Error('Forbidden: Consultation is finalized and prescription choices cannot be modified.');
+    if (consultation.status !== 'under_review') {
+      throw new Error(`Forbidden: Consultation must be under_review before prescribing medication. Current status: ${consultation.status}`);
     }
 
     // 1. Create or update prescription record
     const { data: existingRx } = await supabaseAdmin
       .from('prescriptions')
-      .select('id, status')
+      .select('id, status, doctor_id')
       .eq('consultation_id', consultationId)
       .maybeSingle();
 
-    let prescriptionId: string;
-
-    if (existingRx?.id) {
-      prescriptionId = existingRx.id;
-      const { error: rxUpErr } = await supabaseAdmin
-        .from('prescriptions')
-        .update({
-          doctor_id: doctorId,
-          directions: payload.directions || null,
-          refill_count: payload.refillCount || 0,
-          refill_interval_days: payload.refillIntervalDays || 30,
-          updated_at: timestamp,
-        })
-        .eq('id', prescriptionId);
-
-      if (rxUpErr) throw new Error(`Failed to update prescription: ${rxUpErr.message}`);
-    } else {
-      const { data: newRx, error: rxInErr } = await supabaseAdmin
-        .from('prescriptions')
-        .insert({
-          consultation_id: consultationId,
-          patient_id: consultation.patient_id,
-          doctor_id: doctorId,
-          status: 'draft',
-          directions: payload.directions || null,
-          refill_count: payload.refillCount || 0,
-          refill_interval_days: payload.refillIntervalDays || 30,
-          created_at: timestamp,
-          updated_at: timestamp,
-        })
-        .select('id')
-        .single();
-
-      if (rxInErr) throw new Error(`Failed to create prescription: ${rxInErr.message}`);
-      prescriptionId = newRx.id;
+    if (existingRx?.doctor_id && existingRx.doctor_id !== doctorId) {
+      throw new Error('Forbidden: Prescription belongs to a different doctor and cannot be modified.');
     }
 
-    // 2. Synchronize prescription items cleanly (always delete old items first)
-    const { error: delErr } = await supabaseAdmin
-      .from('prescription_items')
-      .delete()
-      .eq('prescription_id', prescriptionId);
-
-    if (delErr) {
-      throw new Error(`Failed to synchronize prescription items: ${delErr.message}`);
+    if (existingRx?.status === 'finalized') {
+      throw new Error('Forbidden: Prescription is finalized and cannot be modified.');
     }
 
-    if (payload.medicationOptions.length > 0) {
-      const itemsToInsert = payload.medicationOptions.map((opt) => ({
-        prescription_id: prescriptionId,
-        medication_name: opt.name.trim(),
-        active_ingredient: (opt.activeIngredient || opt.name).trim(),
-        strength: opt.strength.trim(),
-        dosage_form: opt.dosageForm.trim(),
-        quantity: opt.quantity || 30,
-        unit_price: opt.priceInr,
-        description: (opt.description || '').trim() || null,
-        is_recommended: Boolean(opt.isRecommended),
-        sig: (payload.directions || '').trim() || null,
-        created_at: timestamp,
-      }));
+    const rpcItems = (payload.medicationOptions || []).map((opt, idx) => ({
+      id: opt.id || `opt_${idx + 1}`,
+      name: opt.name,
+      strength: opt.strength,
+      dosageForm: opt.dosageForm,
+      priceInr: opt.priceInr,
+      description: opt.description || '',
+      isRecommended: Boolean(opt.isRecommended),
+      activeIngredient: opt.activeIngredient || '',
+      quantity: opt.quantity || 1,
+      medication_name: opt.name,
+      dosage_form: opt.dosageForm,
+      price_inr: opt.priceInr,
+      is_recommended: Boolean(opt.isRecommended),
+      active_ingredient: opt.activeIngredient || '',
+    }));
 
-      const { error: insErr } = await supabaseAdmin
-        .from('prescription_items')
-        .insert(itemsToInsert);
+    // Call canonical atomic Postgres RPC transaction exclusively (fail-closed, no non-atomic fallback)
+    const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('fn_save_prescription_with_options', {
+      p_consultation_id: consultationId,
+      p_doctor_id: doctorId,
+      p_directions: payload.directions || null,
+      p_refill_count: payload.refillCount || 0,
+      p_refill_interval_days: payload.refillIntervalDays || 30,
+      p_clinician_message: payload.customClinicianMessage || null,
+      p_items: rpcItems,
+    });
 
-      if (insErr) {
-        throw new Error(`Failed to insert canonical prescription items: ${insErr.message}`);
-      }
+    if (rpcErr) {
+      throw new Error(`Failed to save prescription atomically: ${rpcErr.message}`);
     }
 
-    // 3. Save lightweight reference in consultation responses
-    const updatedResponses = {
-      ...(consultation.responses || {}),
-      medicationOptions: {
-        prescriptionId,
-        customClinicianMessage: payload.customClinicianMessage || 'These options correspond to your approved treatment plan. Please review the available choices.',
-        updatedAt: timestamp,
-      },
-    };
-
-    const { error: respUpErr } = await supabaseAdmin
-      .from('consultations')
-      .update({
-        responses: updatedResponses,
-        updated_at: timestamp,
-      })
-      .eq('id', consultationId);
-
-    if (respUpErr) {
-      throw new Error(`Failed to update consultation responses: ${respUpErr.message}`);
+    if (!rpcRes?.success || !rpcRes?.prescriptionId) {
+      throw new Error('Failed to save prescription atomically: RPC returned unsuccessful status.');
     }
 
-    return { prescriptionId };
+    return { prescriptionId: rpcRes.prescriptionId };
   }
 
   /**
@@ -763,152 +664,23 @@ export class ClinicalWorkflowService {
       treatmentSummary?: string;
     }
   ): Promise<{ success: boolean; status: string; signatureStatus: string; alreadyCompleted?: boolean }> {
-    const timestamp = new Date().toISOString();
+    // Execute atomic Postgres RPC exclusively
+    const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('fn_approve_consultation', {
+      p_consultation_id: consultationId,
+      p_doctor_id: doctorId,
+      p_attestation: signOffData.clinicianAttestation,
+      p_summary: signOffData.treatmentSummary || signOffData.doctorNotes || null,
+    });
 
-    // 1. Consultation exists
-    const { data: consultation, error: cErr } = await supabaseAdmin
-      .from('consultations')
-      .select('*')
-      .eq('id', consultationId)
-      .single();
-
-    if (cErr || !consultation) {
-      throw new Error('Consultation not found.');
+    if (rpcErr) {
+      throw new Error(`Failed to approve consultation: ${rpcErr.message}`);
     }
 
-    // 2. Doctor assigned check
-    if (!consultation.assigned_to || consultation.assigned_to !== doctorId) {
-      throw new Error('Forbidden: Consultation must be claimed and assigned to you before approving.');
+    if (!rpcRes || !rpcRes.success) {
+      throw new Error('Failed to approve consultation: Transaction RPC returned unsuccessful status.');
     }
 
-    // 3. Idempotent completion check
-    if (consultation.status === 'completed') {
-      return {
-        success: true,
-        alreadyCompleted: true,
-        status: 'completed',
-        signatureStatus: 'ready_for_signature',
-      };
-    }
-
-    // 4. Clinician attestation check
-    if (signOffData.clinicianAttestation !== true) {
-      throw new Error('Validation failed: Clinician attestation check is required.');
-    }
-
-    // 5 & 6. Meaningful assessment and plan check in clinical notes
-    const { data: notes } = await supabaseAdmin
-      .from('clinical_notes')
-      .select('*')
-      .eq('consultation_id', consultationId)
-      .eq('doctor_id', doctorId)
-      .order('created_at', { ascending: false });
-
-    const latestNote = notes?.[0];
-    const assessmentText = (latestNote?.assessment || signOffData.treatmentSummary || '').trim();
-    const planText = (latestNote?.plan || '').trim();
-
-    if (!assessmentText) {
-      throw new Error('Validation failed: A meaningful clinical assessment is required before approval.');
-    }
-    if (!planText) {
-      throw new Error('Validation failed: A meaningful clinical treatment plan is required before approval.');
-    }
-
-    // 7, 8, 9, 10. Prescription preconditions check
-    const { data: prescription } = await supabaseAdmin
-      .from('prescriptions')
-      .select('id, doctor_id')
-      .eq('consultation_id', consultationId)
-      .maybeSingle();
-
-    if (!prescription?.id) {
-      throw new Error('Validation failed: A prescription must be saved before approving consultation.');
-    }
-    if (prescription.doctor_id !== doctorId) {
-      throw new Error('Validation failed: Prescription belongs to a different doctor.');
-    }
-
-    const { data: items } = await supabaseAdmin
-      .from('prescription_items')
-      .select('id')
-      .eq('prescription_id', prescription.id);
-
-    if (!items || items.length === 0) {
-      throw new Error('Validation failed: Prescription must contain at least one offered medication option before approval.');
-    }
-
-    // Finalize prescription status
-    const { error: rxUpErr } = await supabaseAdmin
-      .from('prescriptions')
-      .update({
-        status: 'finalized',
-        finalized_at: timestamp,
-        updated_at: timestamp,
-      })
-      .eq('id', prescription.id);
-
-    if (rxUpErr) {
-      throw new Error(`Failed to finalize prescription: ${rxUpErr.message}`);
-    }
-
-    // Update consultation status to completed
-    const updatedResponses = {
-      ...(consultation.responses || {}),
-      signOff: {
-        doctorId,
-        approvedAt: timestamp,
-        clinicianAttestation: true,
-        signaturePlaceholder: 'Electronic signature integration pending provider configuration',
-        signing_status: 'ready_for_signature',
-        treatmentSummary: assessmentText,
-      },
-      signing_status: 'ready_for_signature',
-    };
-
-    const { error: upConsultErr } = await supabaseAdmin
-      .from('consultations')
-      .update({
-        status: 'completed',
-        completed_at: timestamp,
-        responses: updatedResponses,
-        updated_at: timestamp,
-      })
-      .eq('id', consultationId);
-
-    if (upConsultErr) {
-      throw new Error(`Failed to update consultation status to completed: ${upConsultErr.message}`);
-    }
-
-    // Create exactly ONE patient notification in public.notifications
-    const patientId = consultation.patient_id;
-    const notifId = `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const idempotencyKey = `consultation_approved_${consultationId}`;
-
-    const { error: notifErr } = await supabaseAdmin
-      .from('notifications')
-      .upsert({
-        id: notifId,
-        patient_id: patientId,
-        type: 'CONSULTATION_APPROVED',
-        title: 'Your consultation has been reviewed',
-        short_message: 'Your physician has reviewed your intake and approved clinical treatment options.',
-        related_entity_id: consultationId,
-        related_entity_type: 'consultation',
-        status: 'unread',
-        idempotency_key: idempotencyKey,
-        created_at: timestamp,
-      }, { onConflict: 'idempotency_key' });
-
-    if (notifErr) {
-      console.warn('[ClinicalWorkflow] Warning creating patient notification:', notifErr.message);
-    }
-
-    return {
-      success: true,
-      status: 'completed',
-      signatureStatus: 'ready_for_signature',
-    };
+    return rpcRes;
   }
 
   /**
@@ -931,8 +703,7 @@ export class ClinicalWorkflowService {
   /**
    * Patient selects a medication option:
    * Accepts ONLY payload { prescriptionItemId: "<UUID>" }.
-   * Validates option strictly against canonical offered options in prescription_items.
-   * Updates canonical prescriptions table (selected_item_id, selected_at).
+   * Calls fn_select_medication_option RPC for atomic, row-locked selection.
    */
   async selectMedicationOption(
     consultationId: string,
@@ -943,105 +714,29 @@ export class ClinicalWorkflowService {
     selectedOption: any;
     selectionStatus: string;
   }> {
-    const timestamp = new Date().toISOString();
-
     const targetId = payload?.prescriptionItemId;
     if (!targetId || typeof targetId !== 'string' || !targetId.trim()) {
       throw new Error('Valid medication prescriptionItemId is required for selection.');
     }
 
-    const { data: consultation, error: cErr } = await supabaseAdmin
-      .from('consultations')
-      .select('id, patient_id, status, responses')
-      .eq('id', consultationId)
-      .single();
+    const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('fn_select_medication_option', {
+      p_consultation_id: consultationId,
+      p_patient_id: patientId,
+      p_prescription_item_id: targetId.trim(),
+    });
 
-    if (cErr || !consultation) {
-      throw new Error('Consultation not found.');
+    if (rpcErr) {
+      throw new Error(`Failed to select medication option: ${rpcErr.message}`);
     }
 
-    if (consultation.patient_id !== patientId) {
-      throw new Error('Forbidden: You can only select options for your own consultation.');
+    if (!rpcRes || !rpcRes.success) {
+      throw new Error(rpcRes?.error || 'Failed to select medication option.');
     }
-
-    if (consultation.status !== 'completed') {
-      throw new Error('Consultation is not in a completed state for medication selection.');
-    }
-
-    // Fetch canonical prescription
-    const { data: prescription } = await supabaseAdmin
-      .from('prescriptions')
-      .select('id, status')
-      .eq('consultation_id', consultationId)
-      .maybeSingle();
-
-    if (!prescription?.id) {
-      throw new Error('No clinical prescription found for this consultation.');
-    }
-
-    if (prescription.status !== 'finalized') {
-      throw new Error('Prescription is not finalized by physician yet.');
-    }
-
-    const { data: items, error: itemErr } = await supabaseAdmin
-      .from('prescription_items')
-      .select('*')
-      .eq('prescription_id', prescription.id);
-
-    const offeredItems = items || [];
-    if (itemErr || offeredItems.length === 0) {
-      throw new Error('No offered medication items found for this prescription.');
-    }
-
-    const matchedItem = offeredItems.find((item) => item.id === targetId.trim());
-
-    if (!matchedItem) {
-      throw new Error('Invalid medication selection. Selected item ID is not in the offered clinical prescription.');
-    }
-
-    // Update canonical selection on prescriptions table
-    const { error: rxUpErr } = await supabaseAdmin
-      .from('prescriptions')
-      .update({
-        selected_item_id: matchedItem.id,
-        selected_at: timestamp,
-        updated_at: timestamp,
-      })
-      .eq('id', prescription.id);
-
-    if (rxUpErr) {
-      throw new Error(`Failed to save selected medication option in prescription: ${rxUpErr.message}`);
-    }
-
-    // Clean legacy selection fields from consultations.responses if present
-    const currentResponses = { ...(consultation.responses || {}) };
-    delete currentResponses.patient_selected_option;
-    delete currentResponses.patient_selected_prescription_item_id;
-    delete currentResponses.patient_selected_at;
-    delete currentResponses.pharmacy_handoff_status;
-
-    await supabaseAdmin
-      .from('consultations')
-      .update({
-        responses: currentResponses,
-        updated_at: timestamp,
-      })
-      .eq('id', consultationId);
-
-    const selectedOptionDto = {
-      id: matchedItem.id,
-      name: matchedItem.medication_name,
-      strength: matchedItem.strength,
-      dosageForm: matchedItem.dosage_form,
-      priceInr: matchedItem.unit_price || 0,
-      description: matchedItem.description || matchedItem.directions || 'Clinical therapeutic regimen',
-      isRecommended: matchedItem.is_recommended ?? false,
-    };
 
     return {
       success: true,
-      selectedOption: selectedOptionDto,
-      selectionStatus: 'selected_pending_payment',
+      selectedOption: rpcRes.selectedOption,
+      selectionStatus: rpcRes.selectionStatus || 'selected_pending_payment',
     };
   }
 
@@ -1127,12 +822,12 @@ export class ClinicalWorkflowService {
           // Fetch doctor staff profile
           const { data: sProfile } = await supabaseAdmin
             .from('staff_profiles')
-            .select('display_name, first_name, last_name, specialty')
+            .select('first_name, last_name, initials, specialties')
             .eq('id', otherId)
             .maybeSingle();
 
           if (sProfile) {
-            participantName = sProfile.display_name || `Dr. ${sProfile.first_name || ''} ${sProfile.last_name || ''}`.trim();
+            participantName = `Dr. ${sProfile.first_name || ''} ${sProfile.last_name || ''}`.trim();
           } else {
             const { data: bProfile } = await supabaseAdmin
               .from('profiles')
@@ -1172,9 +867,13 @@ export class ClinicalWorkflowService {
 
   /**
    * List messages in a specific thread from Supabase messages table.
-   * Enforces participant authorization.
+   * Enforces participant authorization (patient/doctor only).
    */
   async getThreadMessages(threadId: string, userId: string, role: string): Promise<any[]> {
+    if (role !== 'doctor' && role !== 'patient') {
+      throw new Error('Forbidden: Only patient and doctor participants can access message threads');
+    }
+
     const { messageRepository } = await import('../repositories/messageRepository');
     const thread = await messageRepository.getThread(threadId);
 
@@ -1212,63 +911,47 @@ export class ClinicalWorkflowService {
       throw new Error('Forbidden: Unsupported messaging role');
     }
 
-    const { messageRepository } = await import('../repositories/messageRepository');
-    const thread = await messageRepository.getThread(threadId);
-
-    if (!thread) {
-      throw new Error('Message thread not found');
-    }
-
-    if (senderRole === 'patient' && thread.patient_id !== senderUid) {
-      throw new Error('Forbidden: You are not a participant in this message thread');
-    }
-    if (senderRole === 'doctor' && thread.doctor_id !== senderUid) {
-      throw new Error('Forbidden: You are not a participant in this message thread');
-    }
-
-    const result = await messageRepository.addMessage({
-      threadId,
-      senderUid,
-      senderRole: senderRole as any,
-      text,
+    // Execute atomic Postgres RPC exclusively
+    const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('fn_send_message', {
+      p_thread_id: threadId,
+      p_sender_uid: senderUid,
+      p_sender_role: senderRole,
+      p_message_text: text,
     });
 
-    // Create a notification for the recipient
-    try {
-      const recipientId = senderRole === 'doctor' ? thread.patient_id : thread.doctor_id;
-      const notifId = `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      const idempotencyKey = `msg_notif_${result.messageId}`;
-
-      const { error: notifErr } = await supabaseAdmin
-        .from('notifications')
-        .upsert({
-          id: notifId,
-          patient_id: recipientId,
-          type: 'NEW_MESSAGE',
-          title: senderRole === 'doctor' ? 'New Message from Physician' : 'New Patient Message',
-          short_message: text.length > 80 ? `${text.slice(0, 77)}...` : text,
-          related_entity_id: threadId,
-          related_entity_type: 'thread',
-          status: 'unread',
-          idempotency_key: idempotencyKey,
-          created_at: result.createdAt,
-        }, { onConflict: 'idempotency_key' });
-
-      if (notifErr) {
-        console.error('[ClinicalWorkflow] Failed to create message recipient notification:', notifErr.message);
-      }
-    } catch (notifErr: any) {
-      console.error('[ClinicalWorkflow] Error sending message notification:', notifErr?.message || notifErr);
+    if (rpcErr) {
+      throw new Error(`Failed to send message: ${rpcErr.message}`);
     }
 
-    return result;
+    if (!rpcRes || !rpcRes.success || !rpcRes.messageId) {
+      throw new Error('Failed to send message: Transaction RPC returned unsuccessful status.');
+    }
+
+    return {
+      messageId: rpcRes.messageId,
+      createdAt: rpcRes.createdAt,
+    };
   }
 
   /**
    * Mark thread as read for the user.
    */
   async markThreadRead(threadId: string, readerUid: string, role: string): Promise<void> {
+    if (role !== 'doctor' && role !== 'patient') {
+      throw new Error('Forbidden: Only patient and doctor participants can update thread read status');
+    }
     const { messageRepository } = await import('../repositories/messageRepository');
+    const thread = await messageRepository.getThread(threadId);
+    if (!thread) {
+      throw new Error('Message thread not found');
+    }
+    if (role === 'patient' && thread.patient_id !== readerUid) {
+      throw new Error('Forbidden: You are not a participant in this message thread');
+    }
+    if (role === 'doctor' && thread.doctor_id !== readerUid) {
+      throw new Error('Forbidden: You are not a participant in this message thread');
+    }
+
     await messageRepository.markAsRead(threadId, readerUid, role as any);
   }
 

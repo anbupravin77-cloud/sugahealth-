@@ -1,9 +1,8 @@
 import { adminAuth } from '../firebaseAdmin';
 import { AuthenticatedUser } from './types';
-import { resolveFirebaseUserRole } from './roleResolution';
 
 /**
- * Verifies a Firebase ID token and resolves the server-authenticated user profile.
+ * Legacy Firebase ID token verification (compatibility stub).
  */
 export async function verifyFirebaseIdToken(token: string): Promise<AuthenticatedUser | null> {
   if (!token || typeof token !== 'string') {
@@ -12,12 +11,11 @@ export async function verifyFirebaseIdToken(token: string): Promise<Authenticate
 
   try {
     const decodedToken = await adminAuth.verifyIdToken(token);
-    const role = await resolveFirebaseUserRole(decodedToken);
 
     return {
       uid: decodedToken.uid,
       email: decodedToken.email,
-      role,
+      role: 'patient',
       authProvider: 'firebase',
       firebaseToken: decodedToken,
     };

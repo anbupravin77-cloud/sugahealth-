@@ -51,6 +51,7 @@ DECLARE
   v_notif_a_id TEXT        := 'notif_test_001';
 
   v_test_count INT;
+  v_threw BOOLEAN;
 BEGIN
   RAISE NOTICE 'Starting Suga.Health RLS Test Suite...';
 
@@ -179,34 +180,43 @@ BEGIN
   WHERE id = v_consultation_draft_a_id;
 
   -- TEST 2.1: Patient CANNOT change consultation status (draft -> completed)
+  v_threw := FALSE;
   BEGIN
     UPDATE public.consultations
     SET status = 'completed'
     WHERE id = v_consultation_draft_a_id;
-    RAISE EXCEPTION 'FAIL: Patient was able to change consultation status directly';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected RLS check violation
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Patient was able to change consultation status directly';
+  END IF;
 
   -- TEST 2.2: Patient CANNOT change consultation assignment
+  v_threw := FALSE;
   BEGIN
     UPDATE public.consultations
     SET assigned_to = v_doctor_a_id
     WHERE id = v_consultation_draft_a_id;
-    RAISE EXCEPTION 'FAIL: Patient was able to assign doctor to consultation';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected RLS check violation
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Patient was able to assign doctor to consultation';
+  END IF;
 
   -- TEST 2.3: Patient CANNOT change consultation ownership (patient_id)
+  v_threw := FALSE;
   BEGIN
     UPDATE public.consultations
     SET patient_id = v_patient_b_id
     WHERE id = v_consultation_draft_a_id;
-    RAISE EXCEPTION 'FAIL: Patient was able to reassign consultation ownership';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected RLS check violation
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Patient was able to reassign consultation ownership';
+  END IF;
 
   RAISE NOTICE 'PASS: Patient A isolation verified.';
   RAISE NOTICE 'PASS: Patient consultation update restrictions verified (status, assignment, ownership protected).';
@@ -220,24 +230,30 @@ BEGIN
   WHERE id = v_notif_a_id;
 
   -- Patient CANNOT modify notification title or message
+  v_threw := FALSE;
   BEGIN
     UPDATE public.notifications
     SET title = 'Tampered Title'
     WHERE id = v_notif_a_id;
-    RAISE EXCEPTION 'FAIL: Patient was able to tamper with notification title';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected trigger/RLS violation
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Patient was able to tamper with notification title';
+  END IF;
 
   -- Patient CANNOT modify notification ownership or idempotency fields
+  v_threw := FALSE;
   BEGIN
     UPDATE public.notifications
     SET patient_id = v_patient_b_id, idempotency_key = 'hacked_key'
     WHERE id = v_notif_a_id;
-    RAISE EXCEPTION 'FAIL: Patient was able to modify notification ownership';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected trigger/RLS violation
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Patient was able to modify notification ownership';
+  END IF;
   RAISE NOTICE 'PASS: Notification mark-as-read restriction verified (content, ownership, idempotency immutable).';
 
   -- ---------------------------------------------------------------------------
@@ -271,32 +287,41 @@ BEGIN
   IF v_test_count <> 1 THEN RAISE EXCEPTION 'FAIL: Doctor A cannot read clinical note for assigned Consultation A'; END IF;
 
   -- Client CANNOT INSERT clinical notes
+  v_threw := FALSE;
   BEGIN
     INSERT INTO public.clinical_notes (consultation_id, doctor_id, content)
     VALUES (v_consultation_a_id, v_doctor_a_id, 'Direct client insert attempt');
-    RAISE EXCEPTION 'FAIL: Direct client insert on clinical_notes succeeded';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected RLS denial
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Direct client insert on clinical_notes succeeded';
+  END IF;
 
   -- Client CANNOT UPDATE clinical notes
+  v_threw := FALSE;
   BEGIN
     UPDATE public.clinical_notes
     SET content = 'Tampered content'
     WHERE id = v_note_a_id;
-    RAISE EXCEPTION 'FAIL: Direct client update on clinical_notes succeeded';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected RLS denial
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Direct client update on clinical_notes succeeded';
+  END IF;
 
   -- Client CANNOT DELETE clinical notes
+  v_threw := FALSE;
   BEGIN
     DELETE FROM public.clinical_notes
     WHERE id = v_note_a_id;
-    RAISE EXCEPTION 'FAIL: Direct client delete on clinical_notes succeeded';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected RLS denial
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Direct client delete on clinical_notes succeeded';
+  END IF;
   RAISE NOTICE 'PASS: Clinical notes client-write lockout (INSERT, UPDATE, DELETE denied) verified.';
 
   -- ---------------------------------------------------------------------------
@@ -342,12 +367,15 @@ BEGIN
   SELECT count(*) INTO v_test_count FROM public.audit_logs;
   IF v_test_count < 1 THEN RAISE EXCEPTION 'FAIL: Admin cannot read audit logs'; END IF;
 
+  v_threw := FALSE;
   BEGIN
     INSERT INTO public.audit_logs (action, actor_uid) VALUES ('MALICIOUS_LOG', v_admin_id::text);
-    RAISE EXCEPTION 'FAIL: Direct client write to audit_logs succeeded';
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- Expected denial
+    v_threw := TRUE;
   END;
+  IF NOT v_threw THEN
+    RAISE EXCEPTION 'FAIL: Direct client write to audit_logs succeeded';
+  END IF;
   RAISE NOTICE 'PASS: Admin authorization and audit immutability verified.';
 
   RAISE NOTICE 'ALL RLS TEST SUITES COMPLETED SUCCESSFULLY!';

@@ -58,21 +58,10 @@ export default function DoctorPatientChart() {
 
         const headers = { 'Authorization': `Bearer ${session.access_token}` };
 
-        // 1. Fetch via authorized doctor patient endpoint
+        // Fetch via authorized doctor patient endpoint
         const patientRes = await fetch(`/api/clinical/doctor/patients/${id}`, { headers });
         if (patientRes.ok) {
           const data = await patientRes.json();
-          if (data?.consultation) {
-            setLiveConsultationDetails(data);
-            setLoading(false);
-            return;
-          }
-        }
-
-        // 2. Fallback to direct consultation ID fetch if id was a consultation ID
-        const directRes = await fetch(`/api/clinical/consultations/${id}`, { headers });
-        if (directRes.ok) {
-          const data = await directRes.json();
           if (data?.consultation) {
             setLiveConsultationDetails(data);
             setLoading(false);

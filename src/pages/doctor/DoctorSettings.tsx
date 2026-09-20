@@ -72,10 +72,8 @@ export default function DoctorSettings() {
               <label className="text-2xs font-semibold text-stone-600 uppercase block mb-1">
                 Automated Coverage Delegation
               </label>
-              <select className="w-full p-2 bg-stone-50 border border-stone-200 rounded-lg text-xs">
-                <option>None (Active Direct Coverage)</option>
-                <option>Dr. Kenneth Cole, MD (Cross-Coverage)</option>
-                <option>Dr. Lisa Wong, MD (Endocrinology Backup)</option>
+              <select className="w-full p-2 bg-stone-50 border border-stone-200 rounded-lg text-xs" disabled>
+                <option value="none">Coverage delegation is not configured.</option>
               </select>
             </div>
           </div>
@@ -157,11 +155,11 @@ export default function DoctorSettings() {
                 <span className="font-semibold text-stone-900 block text-2xs">
                   EPCS Hardware Token
                 </span>
-                <span className="text-3xs text-emerald-700 font-mono">
-                  YubiKey 5C NFC Verified
+                <span className="text-3xs text-stone-500 font-mono">
+                  Not configured
                 </span>
               </div>
-              <ShieldCheck className="w-4 h-4 text-emerald-700" />
+              <ShieldCheck className="w-4 h-4 text-stone-400" />
             </div>
           </div>
         </div>

@@ -104,7 +104,6 @@ SELECT
     c.id AS consultation_id,
     c.status,
     c.primary_concern,
-    c.preferred_dosage,
     c.submitted_at,
     c.created_at
 FROM public.consultations c
@@ -134,8 +133,7 @@ SELECT
         UPPER(SUBSTRING(COALESCE(NULLIF(p.first_name, ''), 'D'), 1, 1)),
         UPPER(SUBSTRING(COALESCE(NULLIF(p.last_name, ''), 'R'), 1, 1))
     ) AS initials,
-    sp.specialties,
-    sp.license_state
+    sp.specialties
 FROM public.staff_profiles sp
 JOIN public.profiles p ON p.id = sp.id
 WHERE sp.role = 'doctor'

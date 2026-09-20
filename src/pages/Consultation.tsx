@@ -61,14 +61,10 @@ export default function Consultation() {
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Fetch token helper
+  // Fetch token helper - strictly requires canonical Supabase access token for clinical endpoints
   const getAccessToken = async (): Promise<string | null> => {
     const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) return session.access_token;
-    if (user && typeof (user as any).getIdToken === 'function') {
-      return (user as any).getIdToken();
-    }
-    return null;
+    return session?.access_token || null;
   };
 
   // Auto-load draft, active consultation, or deep-linked completed consultation
@@ -116,10 +112,16 @@ export default function Consultation() {
 
         // Fetch patient consultations list
         const listRes = await fetch('/api/clinical/consultations/patient', { headers });
+        let consults: any[] = [];
         if (listRes.ok) {
           const listData = await listRes.json();
-          const consults = listData.consultations || [];
-          
+          consults = listData.consultations || [];
+        }
+
+        const viewPlanParam = urlParams.get('viewPlan') === 'true';
+
+        // 1. If viewPlan === true, load latest completed treatment plan
+        if (viewPlanParam) {
           const completedCons = consults.find((c: any) => c.status === 'completed');
           if (completedCons) {
             const detailRes = await fetch(`/api/clinical/consultations/${completedCons.id}`, { headers });
@@ -134,16 +136,31 @@ export default function Consultation() {
               return;
             }
           }
-
-          const activeCons = consults.find((c: any) => c.status === 'submitted' || c.status === 'under_review' || c.status === 'assigned');
-          if (activeCons) {
-            setSubmitted(true);
-            setDraftId(activeCons.id);
-            return;
-          }
         }
 
-        // Fallback to draft
+        // 2. Priority: Active draft
+        const draftCons = consults.find((c: any) => c.status === 'draft');
+        if (draftCons) {
+          setDraftId(draftCons.id);
+          if (draftCons.responses) {
+            setFormData((prev) => ({
+              ...prev,
+              ...draftCons.responses,
+              primaryConcern: draftCons.primary_concern || prev.primaryConcern,
+            }));
+          }
+          return;
+        }
+
+        // 3. Priority: Active submitted/assigned/under_review
+        const activeCons = consults.find((c: any) => c.status === 'submitted' || c.status === 'under_review' || c.status === 'assigned');
+        if (activeCons) {
+          setSubmitted(true);
+          setDraftId(activeCons.id);
+          return;
+        }
+
+        // 4. Fallback: Draft endpoint check
         const draftRes = await fetch('/api/clinical/consultations/draft', { headers });
         if (draftRes.ok) {
           const data = await draftRes.json();
@@ -156,6 +173,7 @@ export default function Consultation() {
                 primaryConcern: data.draft.primary_concern || prev.primaryConcern,
               }));
             }
+            return;
           }
         }
       } catch (err) {

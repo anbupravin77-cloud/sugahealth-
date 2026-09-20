@@ -48,6 +48,22 @@ export interface DoctorMessageItem {
   timeFormatted: string;
 }
 
+export function mapThreadPresentationStatus(thread: {
+  status?: string;
+  doctorUnreadCount?: number;
+  patientUnreadCount?: number;
+  unread?: boolean;
+}): 'needs_reply' | 'waiting' | 'resolved' {
+  if (thread.status === 'closed') {
+    return 'resolved';
+  }
+  const unreadCount = thread.doctorUnreadCount ?? (thread.unread ? 1 : 0);
+  if (unreadCount > 0) {
+    return 'needs_reply';
+  }
+  return 'waiting';
+}
+
 export default function DoctorMessages() {
   const { doctor } = useDoctorAuth();
   const [threads, setThreads] = useState<DoctorThreadItem[]>([]);
@@ -159,7 +175,8 @@ export default function DoctorMessages() {
       (t.patientName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (t.subject || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (t.patientMrn || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesTab = tabFilter === 'all' || t.status === tabFilter;
+    const presentationStatus = mapThreadPresentationStatus(t);
+    const matchesTab = tabFilter === 'all' || presentationStatus === tabFilter;
     return matchesSearch && matchesTab;
   });
 
@@ -286,7 +303,7 @@ export default function DoctorMessages() {
                     </p>
 
                     <div className="flex items-center gap-2 mt-2">
-                      <StatusBadge status={thread.status} size="sm" />
+                      <StatusBadge status={mapThreadPresentationStatus(thread)} size="sm" />
                       {thread.priority === 'urgent' && (
                         <PriorityIndicator priority="urgent" size="sm" />
                       )}

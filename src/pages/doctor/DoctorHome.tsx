@@ -82,14 +82,14 @@ export default function DoctorHome() {
       requestedMedication: responses.requestedMedication || responses.medicationPreference || (c.primary_concern === 'weight' ? 'GLP-1 Weight Management' : 'Telehealth Intake'),
       reasonForReview: responses.conditions?.join(', ') || 'Asynchronous clinical evaluation',
       triagePriority: 'normal' as const,
-      status: c.status === 'completed' ? 'completed' : c.status === 'under_review' ? 'in_review' : 'pending_review',
+      status: c.status,
       submittedAt: c.submitted_at || c.created_at,
       waitTimeFormatted: 'Recent',
     };
   });
 
   const pendingConsultations = mappedConsultations.filter(
-    (c) => c.status === 'pending_review' || c.status === 'in_review'
+    (c) => c.status === 'submitted' || c.status === 'assigned' || c.status === 'under_review'
   );
   const urgentItems = pendingConsultations.filter((c) => (c as any).triagePriority === 'urgent');
 

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { requireAuth, requireDoctorAuth } from '../auth/authMiddleware';
+import { requireClinicalAuth as requireAuth, requireClinicalDoctorAuth as requireDoctorAuth } from '../auth/authMiddleware';
 import { clinicalWorkflowService } from '../services/clinicalWorkflowService';
 
 const router = Router();
@@ -15,6 +15,10 @@ const router = Router();
 router.get('/consultations/draft', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
+    if (user.role !== 'patient') {
+      res.status(403).json({ error: 'Forbidden: Draft endpoints are restricted to patients.' });
+      return;
+    }
     const draft = await clinicalWorkflowService.getDraft(user.uid);
     res.json({ draft });
   } catch (err: any) {
@@ -30,6 +34,10 @@ router.get('/consultations/draft', requireAuth, async (req: Request, res: Respon
 router.post('/consultations/draft', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
+    if (user.role !== 'patient') {
+      res.status(403).json({ error: 'Forbidden: Draft endpoints are restricted to patients.' });
+      return;
+    }
     const { primaryConcern, responses, draftId } = req.body;
 
     const result = await clinicalWorkflowService.saveDraft(
@@ -53,13 +61,18 @@ router.post('/consultations/draft', requireAuth, async (req: Request, res: Respo
 router.post('/consultations/:id/submit', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
+    if (user.role !== 'patient') {
+      res.status(403).json({ error: 'Forbidden: Only patients can submit consultations.' });
+      return;
+    }
     const { id } = req.params;
 
     const result = await clinicalWorkflowService.submitConsultation(id, user.uid);
     res.json(result);
   } catch (err: any) {
     console.error('[ClinicalRoutes] Error submitting consultation:', err.message);
-    res.status(400).json({ error: err.message || 'Failed to submit consultation' });
+    const status = err.message?.includes('Forbidden') ? 403 : 400;
+    res.status(status).json({ error: err.message || 'Failed to submit consultation' });
   }
 });
 
@@ -70,6 +83,10 @@ router.post('/consultations/:id/submit', requireAuth, async (req: Request, res: 
 router.get('/consultations/patient', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
+    if (user.role !== 'patient') {
+      res.status(403).json({ error: 'Forbidden: Patient endpoints are restricted to patients.' });
+      return;
+    }
     const consultations = await clinicalWorkflowService.listPatientConsultations(user.uid);
     res.json({ consultations });
   } catch (err: any) {
@@ -103,6 +120,11 @@ router.get('/consultations/:id', requireAuth, async (req: Request, res: Response
 router.post('/consultations/:id/select-option', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
+    if (user.role !== 'patient') {
+      res.status(403).json({ error: 'Forbidden: Only patients can select medication options.' });
+      return;
+    }
+
     const { id } = req.params;
     const { prescriptionItemId } = req.body;
 
@@ -134,9 +156,9 @@ router.get('/doctor/patients/:patientId', requireDoctorAuth, async (req: Request
     const user = (req as any).user;
     const { patientId } = req.params;
 
-    // List doctor's consultations and filter by patient_id
+    // List doctor's consultations where assigned_to = user.uid AND patient_id = patientId
     const consultations = await clinicalWorkflowService.listDoctorConsultations(user.uid, 'all');
-    const matching = consultations.filter((c: any) => c.patient_id === patientId || c.id === patientId);
+    const matching = consultations.filter((c: any) => c.patient_id === patientId && c.assigned_to === user.uid);
 
     if (matching.length === 0) {
       res.status(404).json({ error: 'No consultation record found for this patient assigned to you.' });
@@ -423,7 +445,9 @@ router.post('/messages/threads/:threadId/read', requireAuth, async (req: Request
     res.json({ success: true });
   } catch (err: any) {
     console.error('[ClinicalRoutes] Error marking thread read:', err.message);
-    res.status(500).json({ error: err.message || 'Failed to mark thread read' });
+    const msg = err.message || '';
+    const status = msg.includes('Forbidden') ? 403 : msg.includes('not found') ? 404 : 500;
+    res.status(status).json({ error: msg || 'Failed to mark thread read' });
   }
 });
 
@@ -443,10 +467,9 @@ router.get('/messages/consultations/:consultationId/thread', requireAuth, async 
       return;
     }
 
-    // Verify user authorization for thread
+    // Verify user authorization for thread (strictly patient or assigned doctor)
     const isParticipant = (user.role === 'patient' && thread.patient_id === user.uid) ||
-      (user.role === 'doctor' && thread.doctor_id === user.uid) ||
-      user.role === 'admin';
+      (user.role === 'doctor' && thread.doctor_id === user.uid);
 
     if (!isParticipant) {
       res.status(403).json({ error: 'Forbidden: You are not a participant in this conversation.' });

@@ -104,8 +104,7 @@ export class MessageRepository {
   }
 
   /**
-   * Adds an immutable message to a thread and increments the recipient unread counter.
-   * Enforces message length limits.
+   * Adds an immutable message to a thread atomically using fn_send_message RPC.
    */
   async addMessage(params: {
     threadId: string;
@@ -114,76 +113,30 @@ export class MessageRepository {
     text: string;
     legacyMessageId?: string;
   }): Promise<{ messageId: string; createdAt: string }> {
-    const thread = await this.getThread(params.threadId);
-    if (!thread) {
-      throw new Error('Thread not found');
-    }
-    if (thread.status !== 'open') {
-      throw new Error('Thread is closed');
-    }
-
-    // Verify role safety
-    if (params.senderRole !== 'patient' && params.senderRole !== 'doctor') {
-      throw new Error('Forbidden: Only patient and doctor roles may send clinical messages');
-    }
-
-    // Verify sender boundary
-    if (params.senderRole === 'patient' && thread.patient_id !== params.senderUid) {
-      throw new Error('Forbidden: Sender does not belong to thread');
-    }
-    if (params.senderRole === 'doctor' && thread.doctor_id !== params.senderUid) {
-      throw new Error('Forbidden: Sender does not belong to thread');
-    }
-
     const trimmed = (params.text || '').trim();
     if (trimmed.length === 0 || trimmed.length > 5000) {
       throw new Error('Invalid message length: Must be between 1 and 5000 characters');
     }
 
-    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    const now = new Date().toISOString();
+    const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('fn_send_message', {
+      p_thread_id: params.threadId,
+      p_sender_uid: params.senderUid,
+      p_sender_role: params.senderRole,
+      p_message_text: trimmed,
+    });
 
-    // 1. Insert message
-    const { error: msgError } = await supabaseAdmin
-      .from('messages')
-      .insert({
-        id: messageId,
-        thread_id: params.threadId,
-        sender_uid: params.senderUid,
-        sender_role: params.senderRole,
-        message_text: trimmed,
-        legacy_message_id: params.legacyMessageId || null,
-        created_at: now,
-      });
-
-    if (msgError) {
-      throw new Error(`Failed to append message: ${msgError.message}`);
+    if (rpcErr) {
+      throw new Error(`Failed to append message: ${rpcErr.message}`);
     }
 
-    // 2. Update thread counts and summary
-    const isPatient = params.senderRole === 'patient';
-    const updates: Record<string, any> = {
-      last_message_preview: trimmed.substring(0, 100),
-      last_message_at: now,
-      updated_at: now,
+    if (!rpcRes || !rpcRes.success) {
+      throw new Error('Failed to append message: Transaction RPC returned unsuccessful status.');
+    }
+
+    return {
+      messageId: rpcRes.messageId,
+      createdAt: rpcRes.createdAt,
     };
-
-    if (isPatient) {
-      updates.doctor_unread_count = (thread.doctor_unread_count || 0) + 1;
-    } else {
-      updates.patient_unread_count = (thread.patient_unread_count || 0) + 1;
-    }
-
-    const { error: threadError } = await supabaseAdmin
-      .from('message_threads')
-      .update(updates)
-      .eq('id', params.threadId);
-
-    if (threadError) {
-      console.warn(`[MessageRepository] Failed to update thread counter:`, threadError.message);
-    }
-
-    return { messageId, createdAt: now };
   }
 
   async markAsRead(threadId: string, readerUid: string, readerRole: UserRole): Promise<void> {
@@ -214,19 +167,27 @@ export class MessageRepository {
       updates.doctor_unread_count = 0;
     }
 
-    await supabaseAdmin
+    const { error: threadError } = await supabaseAdmin
       .from('message_threads')
       .update(updates)
       .eq('id', threadId);
 
+    if (threadError) {
+      throw new Error(`Failed to reset thread unread count: ${threadError.message}`);
+    }
+
     // Mark unread messages as read
     const now = new Date().toISOString();
-    await supabaseAdmin
+    const { error: msgError } = await supabaseAdmin
       .from('messages')
       .update({ read_at: now })
       .eq('thread_id', threadId)
       .neq('sender_uid', readerUid)
       .is('read_at', null);
+
+    if (msgError) {
+      throw new Error(`Failed to mark messages as read: ${msgError.message}`);
+    }
   }
 
   async listMessages(threadId: string, limit = 50): Promise<DbMessage[]> {

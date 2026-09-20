@@ -50,7 +50,7 @@ GRANT SELECT ON public.v_unassigned_consultation_queue TO authenticated;
 -- -----------------------------------------------------------------------------
 -- 2. PATIENT-SAFE DOCTOR DIRECTORY VIEW
 -- -----------------------------------------------------------------------------
--- Exposes strictly: doctor_id, first_name, last_name, display_name, initials, specialties, license_state.
+-- Exposes strictly: doctor_id, first_name, last_name, display_name, initials, specialties.
 -- Strictly excludes: email, phone, physical address, date of birth, license number,
 --                    NPI, signature URL, firebase_uid, onboarding flags, audit data.
 --
@@ -75,8 +75,7 @@ SELECT
         UPPER(SUBSTRING(COALESCE(NULLIF(p.first_name, ''), 'D'), 1, 1)),
         UPPER(SUBSTRING(COALESCE(NULLIF(p.last_name, ''), 'R'), 1, 1))
     ) AS initials,
-    sp.specialties,
-    sp.license_state
+    sp.specialties
 FROM public.staff_profiles sp
 JOIN public.profiles p ON p.id = sp.id
 WHERE sp.role = 'doctor'

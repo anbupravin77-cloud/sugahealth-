@@ -25,9 +25,33 @@ export default function NotificationCenter() {
   };
 
   useEffect(() => {
-    if (user) {
-      fetchNotifications();
-    }
+    if (!user) return;
+
+    fetchNotifications();
+
+    const userId = (user as any).uid || (user as any).id;
+    if (!userId) return;
+
+    // Subscribe to Supabase Realtime for notifications table scoped to this patient/doctor
+    const channel = supabase
+      .channel(`user-notifications:${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `patient_id=eq.${userId}`,
+        },
+        () => {
+          fetchNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
   const fetchNotifications = async () => {

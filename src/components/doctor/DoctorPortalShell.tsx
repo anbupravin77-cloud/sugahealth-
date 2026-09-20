@@ -68,7 +68,7 @@ export default function DoctorPortalShell() {
           const data = await res.json();
           const consults = data.consultations || [];
           const count = consults.filter(
-            (c: any) => c.status === 'pending_review' || c.status === 'submitted' || c.status === 'intake_completed'
+            (c: any) => c.status === 'assigned' || c.status === 'under_review' || c.status === 'submitted'
           ).length;
           setPendingCount(count);
         }
@@ -201,8 +201,39 @@ export default function DoctorPortalShell() {
     navigate('/doctor/login');
   };
 
-  const handleMarkAllNotificationsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+  const handleMarkAllNotificationsRead = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        const res = await fetch('/api/clinical/notifications/read-all', {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (res.ok) {
+          setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+        }
+      }
+    } catch (err) {
+      console.warn('Error marking all notifications read:', err);
+    }
+  };
+
+  const handleNotificationClick = async (notifId: string) => {
+    setNotificationsOpen(false);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        await fetch(`/api/clinical/notifications/${notifId}/read`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
+        );
+      }
+    } catch (err) {
+      console.warn('Error marking notification read:', err);
+    }
   };
 
   const filteredNotifications = notificationFilter === 'all'
@@ -356,7 +387,7 @@ export default function DoctorPortalShell() {
                       <Link
                         key={notif.id}
                         to={notif.link || '/doctor'}
-                        onClick={() => setNotificationsOpen(false)}
+                        onClick={() => handleNotificationClick(notif.id)}
                         className={`block p-3.5 hover:bg-stone-50 transition-colors ${
                           !notif.isRead ? 'bg-stone-50/50' : ''
                         }`}

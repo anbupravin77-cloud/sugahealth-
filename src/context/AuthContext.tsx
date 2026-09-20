@@ -1,9 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { User, onAuthStateChanged, signOut as firebaseSignOut } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
 import { supabase } from '../lib/supabase';
-import type { Session } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/supabase-js';
 
 export type UserRole = 'patient' | 'doctor' | 'pharmacist' | 'admin';
 
@@ -63,7 +60,7 @@ export interface UnifiedUser {
 }
 
 interface AuthContextType {
-  user: UnifiedUser | User | null;
+  user: UnifiedUser | null;
   profile: UserProfile | null;
   staffProfile: StaffProfile | null;
   loading: boolean;
@@ -74,13 +71,19 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<UnifiedUser | User | null>(null);
+  const [user, setUser] = useState<UnifiedUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [staffProfile, setStaffProfile] = useState<StaffProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   const syncSupabaseSession = async (session: Session | null): Promise<boolean> => {
-    if (!session?.user) return false;
+    if (!session?.user) {
+      setUser(null);
+      setProfile(null);
+      setStaffProfile(null);
+      setLoading(false);
+      return false;
+    }
 
     try {
       let role: UserRole = 'patient';
@@ -197,29 +200,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return true;
     } catch (err) {
       console.warn('[AuthContext] syncSupabaseSession error:', err);
+      setLoading(false);
       return false;
-    }
-  };
-
-  const fetchFirebaseProfile = async (uid: string) => {
-    try {
-      const userRef = doc(db, 'users', uid);
-      const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        const data = userSnap.data() as UserProfile;
-        setProfile(data);
-
-        // Also fetch staff profile if applicable
-        if (data.role !== 'patient') {
-          const staffRef = doc(db, 'staff_profiles', uid);
-          const staffSnap = await getDoc(staffRef);
-          if (staffSnap.exists()) {
-            setStaffProfile(staffSnap.data() as StaffProfile);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[AuthContext] fetchFirebaseProfile error:', err);
     }
   };
 
@@ -228,10 +210,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         await syncSupabaseSession(session);
-        return;
-      }
-      if (user?.uid) {
-        await fetchFirebaseProfile(user.uid);
       }
     } catch (err) {
       console.warn('[AuthContext] refreshProfile error:', err);
@@ -240,111 +218,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
-    let hasSupabaseSession = false;
 
-    // 1. Check initial Supabase active session (hydrated from local storage or OAuth callback URL)
+    // 1. Hydrate active Supabase session
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!isMounted) return;
       if (session?.user) {
-        hasSupabaseSession = true;
         await syncSupabaseSession(session);
+      } else {
+        setUser(null);
+        setProfile(null);
+        setStaffProfile(null);
+        setLoading(false);
       }
     });
 
-    // 2. Listen to Supabase auth state transitions
+    // 2. Listen to canonical Supabase auth state transitions
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
       if (session?.user) {
-        hasSupabaseSession = true;
         await syncSupabaseSession(session);
       } else if (event === 'SIGNED_OUT') {
-        hasSupabaseSession = false;
-        if (!auth.currentUser) {
-          setUser(null);
-          setProfile(null);
-          setStaffProfile(null);
-          setLoading(false);
-        }
-      }
-    });
-
-    // 3. Listen to Firebase auth state transitions (backward compatibility with existing production data)
-    const unsubscribeFirebase = onAuthStateChanged(auth, async (currentUser) => {
-      if (!isMounted) return;
-
-      // If active Supabase session already claimed auth, don't overwrite with null
-      if (hasSupabaseSession) {
-        return;
-      }
-
-      // Check one more time if Supabase has session before falling back to Firebase
-      try {
-        const { data: { session: currentSbSession } } = await supabase.auth.getSession();
-        if (currentSbSession?.user) {
-          hasSupabaseSession = true;
-          await syncSupabaseSession(currentSbSession);
-          return;
-        }
-      } catch (e) {}
-
-      if (currentUser) {
-        setUser(currentUser);
-
-        // Fetch or create user profile in Firestore
-        try {
-          const userRef = doc(db, 'users', currentUser.uid);
-          const userSnap = await getDoc(userRef);
-
-          if (userSnap.exists()) {
-            const p = userSnap.data() as UserProfile;
-            setProfile(p);
-
-            if (p.role !== 'patient') {
-              const staffRef = doc(db, 'staff_profiles', currentUser.uid);
-              const staffSnap = await getDoc(staffRef);
-              if (staffSnap.exists()) {
-                setStaffProfile(staffSnap.data() as StaffProfile);
-              }
-            }
-          } else {
-            const newProfile: UserProfile = {
-              uid: currentUser.uid,
-              email: currentUser.email,
-              phoneNumber: currentUser.phoneNumber,
-              displayName: currentUser.displayName,
-              role: 'patient',
-              createdAt: new Date().toISOString(),
-            };
-            await setDoc(userRef, newProfile).catch(() => {});
-            setProfile(newProfile);
-          }
-        } catch (fbErr) {
-          console.warn('[AuthContext] Firebase profile load warning:', fbErr);
-        }
-      } else {
         setUser(null);
         setProfile(null);
         setStaffProfile(null);
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
     return () => {
       isMounted = false;
       subscription.unsubscribe();
-      unsubscribeFirebase();
     };
   }, []);
 
   const signOut = async () => {
     try {
       await supabase.auth.signOut();
-    } catch (e) {}
-    try {
-      await firebaseSignOut(auth);
     } catch (e) {}
     setUser(null);
     setProfile(null);

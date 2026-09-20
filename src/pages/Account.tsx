@@ -1,14 +1,13 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth, Address } from '../context/AuthContext';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { supabase } from '../lib/supabase';
 import { Loader2, CheckCircle2, User, MapPin, FileText, ArrowRight, ArrowLeft, ShoppingBag, Bell, Repeat, Pill } from 'lucide-react';
 import { PatientDocumentList } from './PatientDocumentList';
 import { OrdersList } from './patient/OrdersList';
 import SubscriptionsList from './patient/SubscriptionsList';
 import { NotificationPreferences } from './patient/NotificationPreferences';
+import { normalizeIndianPhone } from '../lib/phone';
 
 export default function Account() {
   const { user, profile, refreshProfile } = useAuth();
@@ -155,24 +154,6 @@ export default function Account() {
           console.warn('Clinical consultations fetch error:', err);
         }
 
-        // 2. Fetch legacy Firestore consultations ONLY if not a Supabase user
-        if (!hasSupabaseConsultations && user) {
-          try {
-            const q = query(
-              collection(db, 'consultations'),
-              where('patientId', '==', user.uid)
-            );
-            const snapshot = await getDocs(q);
-            snapshot.docs.forEach((doc) => {
-              if (!results.some((r) => r.id === doc.id)) {
-                results.push({ id: doc.id, ...doc.data() });
-              }
-            });
-          } catch (err) {
-            console.warn('Firestore consultations fetch error:', err);
-          }
-        }
-
         results.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
         setConsultations(results);
         setLoadingConsultations(false);
@@ -185,11 +166,19 @@ export default function Account() {
   const handleSavePersonalInfo = async (e: FormEvent) => {
     e.preventDefault();
     if (!user) return;
+
+    setError('');
+    setSuccess('');
+
+    // Normalize and validate phone
+    const { normalized: normalizedPhone, isValid: isPhoneValid } = normalizeIndianPhone(phone);
+    if (!isPhoneValid) {
+      setError('Enter a valid 10-digit Indian mobile number.');
+      return;
+    }
     
     try {
       setSaving(true);
-      setError('');
-      setSuccess('');
       
       const token = await getAuthToken();
       if (!token) {
@@ -205,7 +194,7 @@ export default function Account() {
         body: JSON.stringify({
           firstName: firstName.trim(),
           lastName: lastName.trim(),
-          phone: phone.trim() || undefined,
+          phone: normalizedPhone, // null if empty, or +91XXXXXXXXXX
           dateOfBirth: dob || null,
           sex: sex || null
         })
@@ -216,10 +205,10 @@ export default function Account() {
         console.error('[AccountProfileSave] Safe diagnostic:', {
           status: res.status,
           errorCode: data.code || 'PROFILE_UPDATE_FAILED',
-          safeMessage: data.details || data.error || 'Failed to save personal information',
+          safeMessage: data.details || data.error || data.message || 'Failed to save personal information',
           path: '/api/user/profile',
         });
-        throw new Error(data.details || data.error || 'Failed to save personal information.');
+        throw new Error(data.details || data.error || data.message || 'Failed to save personal information.');
       }
       
       await refreshProfile();
@@ -236,11 +225,19 @@ export default function Account() {
   const handleSaveShipping = async (e: FormEvent) => {
     e.preventDefault();
     if (!user) return;
+
+    setError('');
+    setSuccess('');
+
+    // Normalize and validate shipping phone
+    const { normalized: normalizedShippingPhone, isValid: isShippingPhoneValid } = normalizeIndianPhone(shipping.phoneNumber);
+    if (!isShippingPhoneValid) {
+      setError('Enter a valid 10-digit Indian mobile number.');
+      return;
+    }
     
     try {
       setSaving(true);
-      setError('');
-      setSuccess('');
       
       const token = await getAuthToken();
       if (!token) {
@@ -256,6 +253,7 @@ export default function Account() {
         body: JSON.stringify({
           shippingAddress: {
             ...shipping,
+            phoneNumber: normalizedShippingPhone, // null if empty, or +91XXXXXXXXXX
             country: 'India'
           }
         })
@@ -266,10 +264,10 @@ export default function Account() {
         console.error('[AccountProfileSave] Safe diagnostic:', {
           status: res.status,
           errorCode: data.code || 'SHIPPING_UPDATE_FAILED',
-          safeMessage: data.details || data.error || 'Failed to save shipping address',
+          safeMessage: data.details || data.error || data.message || 'Failed to save shipping address',
           path: '/api/user/profile',
         });
-        throw new Error(data.details || data.error || 'Failed to save shipping address.');
+        throw new Error(data.details || data.error || data.message || 'Failed to save shipping address.');
       }
       
       await refreshProfile();
