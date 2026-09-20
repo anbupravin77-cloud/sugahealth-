@@ -3,7 +3,6 @@ import path from 'path';
 import fs from 'fs';
 import { defaultContent } from './src/data/defaultContent';
 import { SugaWebsiteContent } from './src/types/content';
-import { adminDb as db, adminAuth } from './src/server/firebaseAdmin';
 import { generateConsultationDocument, generatePrescriptionDocument, getDocumentStream } from './src/server/documentService';
 import { calculateOrderTotals, StripePaymentProvider } from './src/server/commerce';
 import { authRouter } from './src/server/auth/routes';

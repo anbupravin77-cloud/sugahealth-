@@ -53,6 +53,8 @@ export class ClinicalWorkflowService {
           updated_at: timestamp,
         })
         .eq('id', draftId)
+        .eq('patient_id', patientId)
+        .eq('status', 'draft')
         .select('id')
         .single();
 
@@ -62,7 +64,7 @@ export class ClinicalWorkflowService {
       return { id: data.id };
     } else {
       // Find if an active draft already exists for this patient
-      const { data: activeDraft } = await supabaseAdmin
+      const { data: activeDraft, error: draftError } = await supabaseAdmin
         .from('consultations')
         .select('id')
         .eq('patient_id', patientId)
@@ -70,6 +72,10 @@ export class ClinicalWorkflowService {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      if (draftError) {
+        throw new Error(`Failed to retrieve consultation draft: ${draftError.message}`);
+      }
 
       if (activeDraft?.id) {
         const { data, error } = await supabaseAdmin
@@ -80,6 +86,8 @@ export class ClinicalWorkflowService {
             updated_at: timestamp,
           })
           .eq('id', activeDraft.id)
+          .eq('patient_id', patientId)
+          .eq('status', 'draft')
           .select('id')
           .single();
 
@@ -125,8 +133,7 @@ export class ClinicalWorkflowService {
       .maybeSingle();
 
     if (error) {
-      console.warn('[ClinicalWorkflow] Error fetching draft:', error.message);
-      return null;
+      throw new Error(`Failed to retrieve consultation draft: ${error.message}`);
     }
     return data;
   }
