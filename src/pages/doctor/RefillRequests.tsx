@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, RefreshCw, CheckCircle, XCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
 
 export default function RefillRequests() {
   const { user } = useAuth();
@@ -8,13 +9,27 @@ export default function RefillRequests() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
 
+  const getAuthToken = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user && typeof (user as any).getIdToken === 'function') {
+      try {
+        return await (user as any).getIdToken();
+      } catch {}
+    }
+    return null;
+  };
+
   useEffect(() => {
     fetchRequests();
   }, []);
 
   const fetchRequests = async () => {
     try {
-      const token = await user?.getIdToken();
+      const token = await getAuthToken();
+      if (!token) return;
       const res = await fetch('/api/refill-requests', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -34,7 +49,8 @@ export default function RefillRequests() {
     setProcessing(id);
     
     try {
-      const token = await user?.getIdToken();
+      const token = await getAuthToken();
+      if (!token) return;
       const res = await fetch(`/api/refill-requests/${id}/review`, {
         method: 'POST',
         headers: { 

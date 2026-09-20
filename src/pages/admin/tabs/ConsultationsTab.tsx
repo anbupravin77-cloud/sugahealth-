@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../../context/AuthContext';
-import { db } from '../../../lib/firebase';
-import { collection, getDocs, orderBy, query } from 'firebase/firestore';
+import { supabase } from '../../../lib/supabase';
 import { Loader2, User, Activity, AlertCircle, CheckCircle2, ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -17,15 +16,56 @@ export function ConsultationsTab() {
   const [reassigning, setReassigning] = useState(false);
   const [success, setSuccess] = useState('');
 
+  const getAuthToken = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user && typeof (user as any).getIdToken === 'function') {
+      try {
+        return await (user as any).getIdToken();
+      } catch {}
+    }
+    return null;
+  };
+
   const fetchData = async () => {
     if (!user) return;
     try {
-      const q = query(collection(db, 'consultations'), orderBy('updatedAt', 'desc'));
-      const snapshot = await getDocs(q);
-      setConsultations(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      const { data: consultData } = await supabase
+        .from('consultations')
+        .select('*')
+        .order('updated_at', { ascending: false });
+
+      if (consultData) {
+        setConsultations(consultData.map((c: any) => ({
+          id: c.id,
+          patientId: c.patient_id,
+          assignedTo: c.assigned_to,
+          status: c.status,
+          primaryConcern: c.primary_concern,
+          updatedAt: c.updated_at,
+          createdAt: c.created_at,
+          submittedAt: c.submitted_at,
+          responses: c.responses,
+        })));
+      }
       
-      const docsSnap = await getDocs(query(collection(db, 'staff_profiles')));
-      setDoctors(docsSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((d: any) => d.role === 'doctor'));
+      const { data: staffData } = await supabase
+        .from('staff_profiles')
+        .select('*')
+        .eq('role', 'doctor');
+
+      if (staffData) {
+        setDoctors(staffData.map((d: any) => ({
+          id: d.id,
+          displayName: `${d.first_name || ''} ${d.last_name || ''}`.trim() || 'Doctor',
+          firstName: d.first_name,
+          lastName: d.last_name,
+          role: d.role,
+          specialties: d.specialties || [],
+        })));
+      }
       
     } catch (err) {
       console.error(err);
@@ -43,7 +83,7 @@ export function ConsultationsTab() {
     setReassigning(true);
     setSuccess('');
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
       const res = await fetch(`/api/admin/consultations/${id}/reassign`, {
         method: 'POST',
         headers: {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
 import { Loader2, FileText, Download, ShoppingBag } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -14,11 +15,25 @@ export function PatientDocumentList({ consultationId }: PatientDocumentListProps
   const [loading, setLoading] = useState(true);
   const [creatingOrder, setCreatingOrder] = useState<string | null>(null);
 
+  const getAuthToken = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user && typeof (user as any).getIdToken === 'function') {
+      try {
+        return await (user as any).getIdToken();
+      } catch {}
+    }
+    return null;
+  };
+
   useEffect(() => {
     async function fetchDocuments() {
       if (!user) return;
       try {
-        const token = await user.getIdToken();
+        const token = await getAuthToken();
+        if (!token) return;
         const res = await fetch(`/api/consultations/${consultationId}/documents`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
@@ -38,7 +53,8 @@ export function PatientDocumentList({ consultationId }: PatientDocumentListProps
   const handleDownload = async (docId: string, filename: string) => {
     if (!user) return;
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
+      if (!token) return;
       const res = await fetch(`/api/documents/${docId}/download`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -66,7 +82,8 @@ export function PatientDocumentList({ consultationId }: PatientDocumentListProps
     if (!user) return;
     setCreatingOrder(prescriptionId);
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
+      if (!token) return;
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: {

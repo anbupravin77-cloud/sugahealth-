@@ -1,5 +1,5 @@
 export interface IStorageProvider {
-  readonly name: 'firebase' | 'supabase' | 'local';
+  readonly name: 'supabase' | 'local';
 
   /**
    * Uploads a PDF buffer to the private storage bucket.

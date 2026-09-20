@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { db } from '../../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { supabase } from '../../lib/supabase';
 import { Loader2, ArrowLeft, Shield, User, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import { ClinicalNotes } from './ClinicalNotes';
 import { PrescriptionBuilder } from './PrescriptionBuilder';
@@ -18,38 +17,65 @@ export default function DoctorReview() {
   
   const [markingComplete, setMarkingComplete] = useState(false);
 
+  const getAuthToken = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) return session.access_token;
+    } catch {}
+    if (user && typeof (user as any).getIdToken === 'function') {
+      try {
+        return await (user as any).getIdToken();
+      } catch {}
+    }
+    return null;
+  };
+
   useEffect(() => {
     async function loadConsultation() {
       if (!user || !id) return;
       try {
-        const docRef = doc(db, 'consultations', id);
-        const docSnap = await getDoc(docRef);
-        
-        if (!docSnap.exists()) {
-          setError('Consultation not found.');
+        const token = await getAuthToken();
+        if (!token) return;
+
+        const res = await fetch(`/api/clinical/consultations/${id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) {
+          setError('Consultation not found or access forbidden.');
           return;
         }
+
+        const data = await res.json();
+        const cons = data.consultation || data;
         
-        const data = docSnap.data();
-        
-        // Final fallback auth check (rules should catch this too)
-        if (data.assignedTo !== user.uid && profile?.role !== 'admin') {
+        // Final fallback auth check
+        const assignedTo = cons.assigned_to || cons.assignedTo;
+        if (assignedTo && assignedTo !== user.uid && profile?.role !== 'admin') {
           setError('You do not have permission to view this clinical record.');
           return;
         }
         
-        setConsultation({ id: docSnap.id, ...data });
+        setConsultation({
+          id: cons.id,
+          patientId: cons.patient_id || cons.patientId,
+          assignedTo: cons.assigned_to || cons.assignedTo,
+          status: cons.status,
+          primaryConcern: cons.primary_concern || cons.primaryConcern,
+          responses: cons.responses,
+          submittedAt: cons.submitted_at || cons.submittedAt,
+          updatedAt: cons.updated_at || cons.updatedAt,
+        });
         
-        // Log that the doctor opened this if it was merely assigned
-        if (data.status === 'assigned' && profile?.role === 'doctor') {
-          const token = await user.getIdToken();
-          fetch(`/api/consultations/${id}/log_review`, {
+        // If assigned, automatically claim to transition to under_review
+        if (cons.status === 'assigned' && profile?.role === 'doctor') {
+          fetch(`/api/clinical/consultations/${id}/claim`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}` }
-          }).catch(e => console.error("Failed to log review start", e));
-          
-          // Optimistically update local state
-          setConsultation((prev: any) => ({ ...prev, status: 'under_review' }));
+            headers: { Authorization: `Bearer ${token}` }
+          }).then(claimRes => {
+            if (claimRes.ok) {
+              setConsultation((prev: any) => ({ ...prev, status: 'under_review' }));
+            }
+          }).catch(e => console.error("Failed to claim consultation", e));
         }
         
       } catch (err: any) {
@@ -66,8 +92,8 @@ export default function DoctorReview() {
     if (!user || !id) return;
     setMarkingComplete(true);
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`/api/consultations/${id}/complete`, {
+      const token = await getAuthToken();
+      const res = await fetch(`/api/clinical/consultations/${id}/approve`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

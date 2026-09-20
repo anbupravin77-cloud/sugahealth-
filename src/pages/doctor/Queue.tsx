@@ -3,8 +3,7 @@ import { Link } from 'react-router-dom';
 import RefillRequests from './RefillRequests';
 import { RefreshCw } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { db } from '../../lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { supabase } from '../../lib/supabase';
 import { Loader2, Clock, CheckCircle2, Shield, Search, ArrowRight, User } from 'lucide-react';
 
 export default function DoctorQueue() {
@@ -16,16 +15,33 @@ export default function DoctorQueue() {
     async function fetchQueue() {
       if (!user) return;
       try {
-        const q = query(
-          collection(db, 'consultations'),
-          where('assignedTo', '==', user.uid),
-          where('status', 'in', ['assigned', 'under_review', 'completed'])
-        );
-        const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        // Client-side sort by newest first (since composite index might not exist)
-        data.sort((a: any, b: any) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-        setConsultations(data);
+        let token: string | null = null;
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) token = session.access_token;
+        } catch {}
+        if (!token && typeof (user as any).getIdToken === 'function') {
+          token = await (user as any).getIdToken();
+        }
+        if (!token) return;
+
+        const res = await fetch('/api/clinical/doctor/consultations', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const items = (data.consultations || []).map((c: any) => ({
+            id: c.id,
+            patientId: c.patient_id || c.patientId,
+            assignedTo: c.assigned_to || c.assignedTo,
+            status: c.status,
+            primaryConcern: c.primary_concern || c.primaryConcern,
+            submittedAt: c.submitted_at || c.submittedAt || c.created_at || c.createdAt,
+            responses: c.responses || { fullName: c.patient_name || c.patientName },
+          }));
+          items.sort((a: any, b: any) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+          setConsultations(items);
+        }
       } catch (err) {
         console.error("Failed to fetch queue", err);
       } finally {
