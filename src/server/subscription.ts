@@ -1,5 +1,7 @@
-import { adminDb as db } from './firebaseAdmin';
-import { config } from './config';
+import { subscriptionRepository } from './repositories/subscriptionRepository';
+import { prescriptionRepository } from './repositories/prescriptionRepository';
+import { consultationRepository } from './repositories/consultationRepository';
+import { auditRepository } from './repositories/auditRepository';
 
 export interface Subscription {
   subscriptionId: string;
@@ -38,48 +40,41 @@ export class SubscriptionService {
     
     if (!patientId || !prescriptionId) return;
 
-    // Check if subscription already exists for this prescription to prevent duplicates
-    const existingSnap = await db.collection('subscriptions')
-      .where('sourcePrescriptionId', '==', prescriptionId)
-      .where('status', 'in', ['active', 'past_due', 'paused'])
-      .get();
+    // Check if subscription already exists for this prescription in Supabase to prevent duplicates
+    const existing = await subscriptionRepository.listSubscriptionsForPatient(patientId);
+    const alreadyExists = existing.some(sub => 
+      sub.source_prescription_id === prescriptionId && 
+      ['active', 'past_due', 'paused'].includes(sub.status)
+    );
       
-    if (!existingSnap.empty) {
-      console.warn(`[Subscription] A subscription already exists for prescription ${prescriptionId}`);
-      // In real life we'd cancel the new one in Stripe to avoid double billing.
+    if (alreadyExists) {
+      console.warn(`[Subscription] A subscription already exists in Supabase for prescription ${prescriptionId}`);
       return;
     }
 
-    const prescriptionSnap = await db.collection('prescriptions').doc(prescriptionId).get();
-    if (!prescriptionSnap.exists) return;
-    const prescriptionData = prescriptionSnap.data() as any;
+    const prescription = await prescriptionRepository.getById(prescriptionId);
+    if (!prescription) {
+      console.warn(`[Subscription] Prescription ${prescriptionId} not found in Supabase`);
+      return;
+    }
+
+    let treatmentName = 'General Refill';
+    if (prescription.consultation_id) {
+      const consultation = await consultationRepository.getById(prescription.consultation_id);
+      if (consultation && consultation.primary_concern) {
+        treatmentName = consultation.primary_concern;
+      }
+    }
 
     const subId = `sub_${Date.now()}`;
-    const subscription: Subscription = {
-      subscriptionId: subId,
-      patientId,
-      sourcePrescriptionId: prescriptionId,
-      treatmentName: prescriptionData.treatmentCategory || 'General Refill',
-      provider: 'stripe',
-      providerCustomerId: customerId,
-      providerSubscriptionId,
-      status: 'active',
-      billingInterval: interval,
-      intervalCount,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    await db.collection('subscriptions').doc(subId).set(subscription);
     
-    // Dual-write to Supabase subscriptions
+    // Create subscription in Supabase
     try {
-      const { subscriptionRepository } = await import('./repositories/subscriptionRepository');
       await subscriptionRepository.createSubscription({
         id: subId,
         patient_id: patientId,
         source_prescription_id: prescriptionId,
-        treatment_name: subscription.treatmentName,
+        treatment_name: treatmentName,
         provider: 'stripe',
         billing_interval: interval,
         interval_count: intervalCount,
@@ -88,18 +83,16 @@ export class SubscriptionService {
         provider_subscription_id: providerSubscriptionId,
       });
     } catch (err: any) {
-      console.warn('[SubscriptionService] Supabase dual-write error:', err.message);
+      console.error('[SubscriptionService] Supabase create subscription error:', err.message);
+      return;
     }
 
-
-
-    await db.collection('audit_logs').add({
-
+    // Write audit log to Supabase
+    await auditRepository.log({
       action: 'SUBSCRIPTION_CREATED',
       actorUid: 'system',
       subscriptionId: subId,
-      patientId,
-      timestamp: new Date().toISOString()
+      metadata: { patientId, prescriptionId }
     });
 
     const { NotificationService } = await import('./notifications');
@@ -108,7 +101,7 @@ export class SubscriptionService {
       patientId,
       type: 'SUBSCRIPTION_ACTIVATED',
       title: 'Subscription Activated',
-      shortMessage: `Your refill subscription for ${subscription.treatmentName} is now active.`,
+      shortMessage: `Your refill subscription for ${treatmentName} is now active.`,
       relatedEntityId: subId,
       relatedEntityType: 'document',
       idempotencyKey: `sub_act_${subId}`
@@ -116,77 +109,56 @@ export class SubscriptionService {
   }
 
   async handlePaymentSucceeded(providerSubscriptionId: string, invoiceId: string, billingReason: string) {
-    const subsSnap = await db.collection('subscriptions').where('providerSubscriptionId', '==', providerSubscriptionId).limit(1).get();
-    
-    if (subsSnap.empty) return;
-    
-    const subDoc = subsSnap.docs[0];
-    const subData = subDoc.data() as Subscription;
+    const subData = await subscriptionRepository.getSubscriptionByProviderId(providerSubscriptionId);
+    if (!subData) {
+      console.warn(`[Subscription] Subscription for provider sub ID ${providerSubscriptionId} not found in Supabase`);
+      return;
+    }
 
     if (subData.status === 'past_due') {
-      await subDoc.ref.update({ status: 'active', updatedAt: new Date().toISOString() });
+      await subscriptionRepository.updateSubscriptionStatus(subData.id, 'active');
     }
 
     // Idempotency: avoid creating duplicate refill requests for the same invoice
     const idempotencyKey = `refill_req_${invoiceId}`;
-    const existingReqSnap = await db.collection('refill_requests').where('idempotencyKey', '==', idempotencyKey).get();
-    if (!existingReqSnap.empty) return;
-
-    // Create a refill request
     const refillRequestId = `refreq_${Date.now()}`;
-    const refillReq: RefillRequest & { idempotencyKey: string } = {
-      refillRequestId,
-      patientId: subData.patientId,
-      sourcePrescriptionId: subData.sourcePrescriptionId,
-      subscriptionId: subData.subscriptionId,
-      status: 'pending_review',
-      createdAt: new Date().toISOString(),
-      idempotencyKey
-    };
 
-    await db.collection('refill_requests').doc(refillRequestId).set(refillReq);
-
-    // Dual-write to Supabase refill requests
+    // Create a refill request in Supabase
     try {
-      const { subscriptionRepository } = await import('./repositories/subscriptionRepository');
       await subscriptionRepository.createRefillRequest({
         id: refillRequestId,
-        patient_id: subData.patientId,
-        source_prescription_id: subData.sourcePrescriptionId,
-        subscription_id: subData.subscriptionId,
+        patient_id: subData.patient_id,
+        source_prescription_id: subData.source_prescription_id,
+        subscription_id: subData.id,
         status: 'pending_review',
         idempotency_key: idempotencyKey,
       });
     } catch (err: any) {
-      console.warn('[SubscriptionService] Supabase refill request dual-write error:', err.message);
+      console.error('[SubscriptionService] Supabase create refill request error:', err.message);
+      return;
     }
 
-
-
-
-    await db.collection('audit_logs').add({
+    // Log to Supabase audit_logs
+    await auditRepository.log({
       action: 'RENEWAL_PAYMENT_VERIFIED',
       actorUid: 'system',
-      subscriptionId: subData.subscriptionId,
-      patientId: subData.patientId,
-      timestamp: new Date().toISOString()
+      subscriptionId: subData.id,
+      metadata: { patientId: subData.patient_id }
     });
 
-    await db.collection('audit_logs').add({
+    await auditRepository.log({
       action: 'REFILL_REQUEST_CREATED',
       actorUid: 'system',
-      refillRequestId,
-      patientId: subData.patientId,
-      timestamp: new Date().toISOString()
+      metadata: { refillRequestId, patientId: subData.patient_id }
     });
 
     const { NotificationService } = await import('./notifications');
     const notif = new NotificationService();
     await notif.createNotification({
-      patientId: subData.patientId,
+      patientId: subData.patient_id,
       type: 'REFILL_SUBMITTED',
       title: 'Refill Request Submitted',
-      shortMessage: `Your recurring payment was successful. A refill request for ${subData.treatmentName} has been submitted for clinical review.`,
+      shortMessage: `Your recurring payment was successful. A refill request for ${subData.treatment_name || 'General Refill'} has been submitted for clinical review.`,
       relatedEntityId: refillRequestId,
       relatedEntityType: 'document',
       idempotencyKey: `refill_notif_${invoiceId}`
@@ -194,77 +166,65 @@ export class SubscriptionService {
   }
 
   async handlePaymentFailed(providerSubscriptionId: string, invoiceId: string) {
-    const subsSnap = await db.collection('subscriptions').where('providerSubscriptionId', '==', providerSubscriptionId).limit(1).get();
-    
-    if (subsSnap.empty) return;
-    
-    const subDoc = subsSnap.docs[0];
-    const subData = subDoc.data() as Subscription;
+    const subData = await subscriptionRepository.getSubscriptionByProviderId(providerSubscriptionId);
+    if (!subData) {
+      console.warn(`[Subscription] Subscription for provider sub ID ${providerSubscriptionId} not found in Supabase`);
+      return;
+    }
 
-    await subDoc.ref.update({ status: 'past_due', updatedAt: new Date().toISOString() });
+    await subscriptionRepository.updateSubscriptionStatus(subData.id, 'past_due');
 
-    await db.collection('audit_logs').add({
+    // Audit log in Supabase
+    await auditRepository.log({
       action: 'RENEWAL_PAYMENT_FAILED',
       actorUid: 'system',
-      subscriptionId: subData.subscriptionId,
-      patientId: subData.patientId,
-      timestamp: new Date().toISOString()
+      subscriptionId: subData.id,
+      metadata: { patientId: subData.patient_id }
     });
 
     const { NotificationService } = await import('./notifications');
     const notif = new NotificationService();
     await notif.createNotification({
-      patientId: subData.patientId,
+      patientId: subData.patient_id,
       type: 'PAYMENT_REQUIRED',
       title: 'Action Required: Payment Failed',
       shortMessage: `Your recurring payment failed. Please update your payment method to continue your subscription.`,
-      relatedEntityId: subData.subscriptionId,
+      relatedEntityId: subData.id,
       relatedEntityType: 'document',
       idempotencyKey: `pay_fail_${invoiceId}`
     });
   }
 
   async handleSubscriptionCancelled(providerSubscriptionId: string) {
-    const subsSnap = await db.collection('subscriptions').where('providerSubscriptionId', '==', providerSubscriptionId).limit(1).get();
-    
-    if (subsSnap.empty) return;
-    
-    const subDoc = subsSnap.docs[0];
-    const subData = subDoc.data() as Subscription;
-
-    await subDoc.ref.update({ 
-      status: 'cancelled', 
-      cancelledAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString() 
-    });
-
-    // Dual-write cancellation to Supabase
-    try {
-      const { subscriptionRepository } = await import('./repositories/subscriptionRepository');
-      await subscriptionRepository.updateSubscriptionStatus(subData.subscriptionId, 'cancelled');
-    } catch (err: any) {
-      console.warn('[SubscriptionService] Supabase cancel status error:', err.message);
+    const subData = await subscriptionRepository.getSubscriptionByProviderId(providerSubscriptionId);
+    if (!subData) {
+      console.warn(`[Subscription] Subscription for provider sub ID ${providerSubscriptionId} not found in Supabase`);
+      return;
     }
 
+    const now = new Date().toISOString();
+    await subscriptionRepository.updateSubscriptionStatus(subData.id, 'cancelled', {
+      cancelledAt: now
+    });
 
-    await db.collection('audit_logs').add({
+    // Audit log in Supabase
+    await auditRepository.log({
       action: 'SUBSCRIPTION_CANCELLED',
       actorUid: 'system',
-      subscriptionId: subData.subscriptionId,
-      patientId: subData.patientId,
-      timestamp: new Date().toISOString()
+      subscriptionId: subData.id,
+      metadata: { patientId: subData.patient_id }
     });
 
     const { NotificationService } = await import('./notifications');
     const notif = new NotificationService();
     await notif.createNotification({
-      patientId: subData.patientId,
+      patientId: subData.patient_id,
       type: 'SUBSCRIPTION_CANCELLED',
       title: 'Subscription Cancelled',
-      shortMessage: `Your refill subscription for ${subData.treatmentName} has been cancelled.`,
-      relatedEntityId: subData.subscriptionId,
+      shortMessage: `Your refill subscription for ${subData.treatment_name || 'General Refill'} has been cancelled.`,
+      relatedEntityId: subData.id,
       relatedEntityType: 'document',
-      idempotencyKey: `sub_can_${subData.subscriptionId}`
+      idempotencyKey: `sub_can_${subData.id}`
     });
   }
 }

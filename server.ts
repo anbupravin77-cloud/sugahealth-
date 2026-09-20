@@ -214,10 +214,10 @@ const PORT = 3000;
       saveStorageAtomic(updated);
 
       const decodedToken = (req as any).user;
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'CONTENT_RESET_TO_DEFAULTS',
-        actorUid: decodedToken?.uid || 'admin',
-        timestamp: new Date().toISOString()
+        actorUid: decodedToken?.uid || 'admin'
       });
 
       res.json({
@@ -612,32 +612,29 @@ const PORT = 3000;
       const { firstName, lastName, initials, phoneNumber, professionalAddress } = req.body;
       const uid = decodedToken.uid;
 
-      const profileRef = db.collection('staff_profiles').doc(uid);
-      const userRef = db.collection('users').doc(uid);
-
-      await profileRef.update({
-        firstName,
-        lastName,
+      const { profileRepository } = await import('./src/server/repositories/profileRepository');
+      await profileRepository.updateStaffOnboarding(uid, {
+        first_name: firstName,
+        last_name: lastName,
         initials,
-        phoneNumber,
-        professionalAddress,
-        onboardingStatus: 'completed',
-        updatedAt: new Date().toISOString(),
+        phone_number: phoneNumber,
+        professional_address: professionalAddress,
+        onboarding_status: 'completed'
       });
       
-      await userRef.update({
-        firstName,
-        lastName,
-        phoneNumber,
-        displayName: `${firstName} ${lastName}`.trim(),
+      await profileRepository.updateProfile(uid, {
+        first_name: firstName,
+        last_name: lastName,
+        phone_number: phoneNumber,
+        display_name: `${firstName} ${lastName}`.trim()
       });
 
       // Audit log
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         actorUid: uid,
-        targetUid: uid,
         action: 'ONBOARDING_COMPLETED',
-        timestamp: new Date().toISOString(),
+        metadata: { targetUid: uid }
       });
 
       res.json({ success: true });
@@ -656,149 +653,14 @@ const PORT = 3000;
     try {
       const { id } = req.params;
       const decodedToken = (req as any).user;
-      const uid = decodedToken.uid;
       
-      const docRef = db.collection('consultations').doc(id);
-      const docSnap = await docRef.get();
-      
-      if (!docSnap.exists) {
-        res.status(404).json({ error: 'Consultation not found' });
-        return;
-      }
-      
-      const consultation = docSnap.data();
-      if (consultation?.patientId !== uid) {
-        res.status(403).json({ error: 'Forbidden' });
-        return;
-      }
-      if (consultation?.status !== 'draft') {
-        res.status(400).json({ error: 'Consultation already submitted' });
-        return;
-      }
-      
-      // Determine eligibility based on primaryConcern
-      const concern = consultation?.primaryConcern || 'weight'; // default
-      
-      // Get all active doctors with matching specialty
-      const doctorsSnap = await db.collection('staff_profiles')
-        .where('role', '==', 'doctor')
-        .where('active', '==', true)
-        .where('onboardingStatus', '==', 'completed')
-        .get();
-        
-      const eligibleDoctors = doctorsSnap.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter((docData: any) => docData.specialties && docData.specialties.includes(concern));
-        
-      let assignedDoctorId = null;
-      let assignmentMethod = 'none';
-      
-      if (eligibleDoctors.length > 0) {
-        // Check for Continuity of Care (previous doctor for same concern)
-        const previousConsultations = await db.collection('consultations')
-          .where('patientId', '==', uid)
-          .where('primaryConcern', '==', concern)
-          .where('status', 'in', ['completed', 'assigned', 'under_review'])
-          .orderBy('submittedAt', 'desc')
-          .limit(1)
-          .get();
-          
-        if (!previousConsultations.empty) {
-          const prevDocId = previousConsultations.docs[0].data().assignedTo;
-          if (prevDocId && eligibleDoctors.some(d => d.id === prevDocId)) {
-            assignedDoctorId = prevDocId;
-            assignmentMethod = 'continuity';
-          }
-        }
-        
-        // Workload-aware assignment
-        if (!assignedDoctorId) {
-          let leastAssignedDoc = null;
-          let minCount = Infinity;
-          
-          for (const doc of eligibleDoctors) {
-            const countSnap = await db.collection('consultations')
-              .where('assignedTo', '==', doc.id)
-              .where('status', 'in', ['assigned', 'under_review'])
-              .count()
-              .get();
-            const count = countSnap.data().count;
-            if (count < minCount) {
-              minCount = count;
-              leastAssignedDoc = doc.id;
-            }
-          }
-          if (leastAssignedDoc) {
-            assignedDoctorId = leastAssignedDoc;
-            assignmentMethod = 'workload';
-          }
-        }
-      }
-      
-      const status = assignedDoctorId ? 'assigned' : 'submitted';
-      const timestamp = new Date().toISOString();
-      
-      const updatePayload: any = {
-        status,
-        submittedAt: timestamp,
-        updatedAt: timestamp,
-        schemaVersion: 1
-      };
-      
-      if (assignedDoctorId) {
-        updatePayload.assignedTo = assignedDoctorId;
-      }
-      
-      await docRef.update(updatePayload);
-      
-      // Log assignment audit event
-      if (assignedDoctorId) {
-        await db.collection('audit_logs').add({
-          action: 'CONSULTATION_ASSIGNED',
-          actorUid: 'system',
-          targetUid: assignedDoctorId,
-          consultationId: id,
-          timestamp,
-          metadata: { method: assignmentMethod }
-        });
-        
-        // Auto-create Message Thread
-        try {
-          const { messageRepository } = await import('./src/server/repositories/messageRepository');
-          await messageRepository.ensureThread(uid, assignedDoctorId, id);
-        } catch (threadErr) {
-          console.error('Error auto-creating message thread:', threadErr);
-        }
-      }
-
-      // Auto-generate consultation document
-      try {
-        await generateConsultationDocument(db, id, decodedToken.uid);
-      } catch (docErr) {
-        console.error('Error auto-generating consultation document:', docErr);
-      }
-
-      // Generate Patient Notification
-      try {
-        const { NotificationService } = await import('./src/server/notifications');
-        const notifService = new NotificationService();
-        await notifService.createNotification({
-          patientId: uid,
-          type: 'CONSULTATION_SUBMITTED',
-          title: 'Consultation Submitted',
-          shortMessage: 'Your clinical intake has been received and is being reviewed by a doctor.',
-          relatedEntityId: id,
-          relatedEntityType: 'consultation',
-          idempotencyKey: `consultation_submit_${id}`
-        });
-      } catch (notifErr) {
-        console.warn('Non-blocking notification error during consultation submit:', notifErr);
-      }
-      
-      res.json({ success: true, status, assignedTo: assignedDoctorId });
+      const { clinicalWorkflowService } = await import('./src/server/services/clinicalWorkflowService');
+      const result = await clinicalWorkflowService.submitConsultation(id, decodedToken.uid);
+      res.json(result);
     } catch (err: any) {
-      console.warn('Consultation submission endpoint encountered non-fatal error, returning submitted status:', err);
-      res.json({ success: true, status: 'submitted', assignedTo: null });
+      console.error('Error submitting consultation:', err);
+      const status = err.message?.includes('Forbidden') ? 403 : 400;
+      res.status(status).json({ error: err.message || 'Internal Error' });
     }
   });
 
@@ -814,29 +676,31 @@ const PORT = 3000;
         return;
       }
       
-      const docRef = db.collection('consultations').doc(id);
-      const docSnap = await docRef.get();
-      
-      if (!docSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consult = await consultationRepository.getById(id);
+      if (!consult) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
       
-      const prevDoctor = docSnap.data()?.assignedTo || null;
+      const prevDoctor = consult.assigned_to || null;
       const timestamp = new Date().toISOString();
       
-      await docRef.update({
-        assignedTo,
-        status: 'assigned', // reset status to assigned
-        updatedAt: timestamp
-      });
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+      await supabaseAdmin
+        .from('consultations')
+        .update({
+          assigned_to: assignedTo,
+          status: 'assigned',
+          updated_at: timestamp
+        })
+        .eq('id', id);
       
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'CONSULTATION_REASSIGNED',
         actorUid: decodedToken.uid,
-        targetUid: assignedTo,
         consultationId: id,
-        timestamp,
         metadata: { prevDoctor, reason: reason || 'Admin override' }
       });
       
@@ -853,17 +717,15 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
       
-      const docRef = db.collection('consultations').doc(id);
-      const docSnap = await docRef.get();
-      
-      if (!docSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Not found' });
         return;
       }
       
-      const consultData = docSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -875,29 +737,32 @@ const PORT = 3000;
       const updates: Record<string, any> = {};
 
       if (isUnassigned && decodedToken.role === 'doctor') {
-        updates.assignedTo = decodedToken.uid;
+        updates.assigned_to = decodedToken.uid;
       }
 
-      // Update status to under_review if currently submitted or assigned
-      if ((consultData?.status === 'assigned' || consultData?.status === 'submitted') && decodedToken.role === 'doctor') {
+      if ((consultData.status === 'assigned' || consultData.status === 'submitted') && decodedToken.role === 'doctor') {
         updates.status = 'under_review';
       }
 
       if (Object.keys(updates).length > 0) {
-        updates.updatedAt = timestamp;
-        await docRef.update(updates);
+        updates.updated_at = timestamp;
+        const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+        await supabaseAdmin
+          .from('consultations')
+          .update(updates)
+          .eq('id', id);
       }
       
-      // Add audit log
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'CONSULTATION_REVIEWED',
         actorUid: decodedToken.uid,
-        consultationId: id,
-        timestamp: new Date().toISOString()
+        consultationId: id
       });
       
       res.json({ success: true });
     } catch (err: any) {
+      console.error('Error logging review:', err);
       res.status(500).json({ error: 'Internal Error' });
     }
   });
@@ -912,15 +777,15 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
       
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
       
-      const consultData = consultSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -928,12 +793,18 @@ const PORT = 3000;
         return;
       }
 
-      const snap = await db.collection('clinical_notes')
-        .where('consultationId', '==', id)
-        .orderBy('createdAt', 'desc')
-        .get();
-        
-      const notes = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const { clinicalNoteRepository } = await import('./src/server/repositories/clinicalNoteRepository');
+      const dbNotes = await clinicalNoteRepository.getByConsultationId(id, decodedToken.uid, decodedToken.role);
+      
+      const notes = dbNotes.map(n => ({
+        id: n.id,
+        consultationId: n.consultation_id,
+        doctorId: n.doctor_id,
+        text: n.content || '',
+        createdAt: n.created_at,
+        updatedAt: n.updated_at
+      }));
+
       res.json({ notes });
     } catch (err: any) {
       console.error('Error fetching notes:', err);
@@ -953,15 +824,15 @@ const PORT = 3000;
         return;
       }
       
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
       
-      const consultData = consultSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -971,38 +842,39 @@ const PORT = 3000;
 
       const timestamp = new Date().toISOString();
 
-      // If consultation was unassigned, assign it to this doctor upon note creation
       if (isUnassigned && decodedToken.role === 'doctor') {
-        await db.collection('consultations').doc(id).update({
-          assignedTo: decodedToken.uid,
-          updatedAt: timestamp
-        });
+        const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+        await supabaseAdmin
+          .from('consultations')
+          .update({
+            assigned_to: decodedToken.uid,
+            updated_at: timestamp
+          })
+          .eq('id', id);
       }
 
       let finalNoteId = noteId;
+      const { clinicalNoteRepository } = await import('./src/server/repositories/clinicalNoteRepository');
 
       if (noteId) {
-        await db.collection('clinical_notes').doc(noteId).update({
-          text,
-          updatedAt: timestamp
+        await clinicalNoteRepository.updateNote(noteId, decodedToken.uid, {
+          content: text
         });
       } else {
-        const newRef = await db.collection('clinical_notes').add({
+        const note = await clinicalNoteRepository.saveNote({
           consultationId: id,
           doctorId: decodedToken.uid,
-          text,
-          createdAt: timestamp,
-          updatedAt: timestamp
+          content: text
         });
-        finalNoteId = newRef.id;
+        finalNoteId = note.id;
       }
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: noteId ? 'CLINICAL_NOTE_UPDATED' : 'CLINICAL_NOTE_CREATED',
         actorUid: decodedToken.uid,
         consultationId: id,
-        noteId: finalNoteId,
-        timestamp
+        metadata: { noteId: finalNoteId }
       });
 
       res.json({ success: true, noteId: finalNoteId });
@@ -1022,15 +894,15 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
 
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
 
-      const consultData = consultSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -1038,17 +910,40 @@ const PORT = 3000;
         return;
       }
 
-      const snap = await db.collection('prescriptions')
-        .where('consultationId', '==', id)
-        .limit(1)
-        .get();
-        
-      if (snap.empty) {
+      const { prescriptionRepository } = await import('./src/server/repositories/prescriptionRepository');
+      const rxs = await prescriptionRepository.getByConsultationId(id);
+      
+      if (rxs.length === 0) {
         res.json({ prescription: null });
         return;
       }
       
-      const prescription = { id: snap.docs[0].id, ...snap.docs[0].data() };
+      const p = rxs[0];
+
+      const prescription = {
+        id: p.id,
+        consultationId: p.consultation_id,
+        patientId: p.patient_id,
+        doctorId: p.doctor_id,
+        status: p.status,
+        directions: p.directions,
+        refillEligible: p.refill_count > 0,
+        refillCount: p.refill_count,
+        refillIntervalDays: p.refill_interval_days,
+        treatmentCategory: consultData.primary_concern || '',
+        createdAt: p.created_at,
+        updatedAt: p.updated_at,
+        medications: p.items.map(item => ({
+          medicationName: item.medication_name,
+          activeIngredient: item.active_ingredient,
+          strength: item.strength,
+          dosageForm: item.dosage_form,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          sig: item.sig
+        }))
+      };
+
       res.json({ prescription });
     } catch (err: any) {
       console.error('Error fetching prescription:', err);
@@ -1063,17 +958,16 @@ const PORT = 3000;
       const { medications, prescriptionId, refillEligible, refillIntervalDays, treatmentCategory } = req.body;
       const decodedToken = (req as any).user;
       
-      const consultRef = db.collection('consultations').doc(id);
-      const consultSnap = await consultRef.get();
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
       
-      if (!consultSnap.exists) {
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
       
-      const consultData = consultSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -1083,53 +977,103 @@ const PORT = 3000;
 
       const timestamp = new Date().toISOString();
 
-      // If unassigned, assign this consultation to the current doctor
       if (isUnassigned && decodedToken.role === 'doctor') {
-        await consultRef.update({
-          assignedTo: decodedToken.uid,
-          updatedAt: timestamp
-        });
+        const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+        await supabaseAdmin
+          .from('consultations')
+          .update({
+            assigned_to: decodedToken.uid,
+            updated_at: timestamp
+          })
+          .eq('id', id);
       }
 
       let finalPrescriptionId = prescriptionId;
+      const { prescriptionRepository } = await import('./src/server/repositories/prescriptionRepository');
 
       if (prescriptionId) {
         // Ensure not finalized
-        const existing = await db.collection('prescriptions').doc(prescriptionId).get();
-        if (existing.data()?.status !== 'draft') {
+        const existing = await prescriptionRepository.getById(prescriptionId);
+        if (!existing) {
+          res.status(404).json({ error: 'Prescription not found' });
+          return;
+        }
+        if (existing.status !== 'draft') {
           res.status(400).json({ error: 'Cannot edit finalized prescription' });
           return;
         }
 
-        await db.collection('prescriptions').doc(prescriptionId).update({
-          medications,
-          refillEligible: refillEligible || false,
-          refillIntervalDays: refillIntervalDays || 30,
-          treatmentCategory: treatmentCategory || '',
-          updatedAt: timestamp
-        });
+        const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+        await supabaseAdmin
+          .from('prescriptions')
+          .update({
+            directions: medications?.[0]?.sig || '',
+            refill_count: refillEligible ? (req.body.refillCount || 5) : 0,
+            refill_interval_days: refillIntervalDays || 30,
+            treatment_category: treatmentCategory || '',
+            updated_at: timestamp
+          })
+          .eq('id', prescriptionId);
+
+        // Delete existing items and insert new ones
+        await supabaseAdmin
+          .from('prescription_items')
+          .delete()
+          .eq('prescription_id', prescriptionId);
+
+        if (medications && medications.length > 0) {
+          const itemsToInsert = medications.map((m: any) => ({
+            prescription_id: prescriptionId,
+            medication_name: m.medicationName || m.medication_name,
+            active_ingredient: m.activeIngredient || m.active_ingredient || null,
+            strength: m.strength || '',
+            dosage_form: m.dosageForm || m.dosage_form || 'tablet',
+            quantity: m.quantity || 1,
+            unit_price: m.unitPrice || m.unit_price || 0.0,
+            sig: m.sig || null,
+            created_at: timestamp,
+          }));
+          await supabaseAdmin
+            .from('prescription_items')
+            .insert(itemsToInsert);
+        }
       } else {
-        const newRef = await db.collection('prescriptions').add({
+        const refillCountVal = refillEligible ? (req.body.refillCount || 5) : 0;
+        const items = (medications || []).map((m: any) => ({
+          medication_name: m.medicationName || m.medication_name,
+          active_ingredient: m.activeIngredient || m.active_ingredient || null,
+          strength: m.strength || '',
+          dosage_form: m.dosageForm || m.dosage_form || 'tablet',
+          quantity: m.quantity || 1,
+          unit_price: m.unitPrice || m.unit_price || 0.0,
+          sig: m.sig || null,
+        }));
+
+        const rx = await prescriptionRepository.saveDraft({
           consultationId: id,
-          patientId: consultSnap.data()?.patientId,
           doctorId: decodedToken.uid,
-          status: 'draft',
-          medications,
-          refillEligible: refillEligible || false,
+          patientId: consultData.patient_id,
+          directions: items?.[0]?.sig || '',
+          refillCount: refillCountVal,
           refillIntervalDays: refillIntervalDays || 30,
-          treatmentCategory: treatmentCategory || '',
-          createdAt: timestamp,
-          updatedAt: timestamp
+          items,
         });
-        finalPrescriptionId = newRef.id;
+        finalPrescriptionId = rx.id;
+        
+        // Also write treatment category
+        const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+        await supabaseAdmin
+          .from('prescriptions')
+          .update({ treatment_category: treatmentCategory || '' })
+          .eq('id', rx.id);
       }
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: prescriptionId ? 'PRESCRIPTION_UPDATED' : 'PRESCRIPTION_CREATED',
         actorUid: decodedToken.uid,
         consultationId: id,
-        prescriptionId: finalPrescriptionId,
-        timestamp
+        metadata: { prescriptionId: finalPrescriptionId }
       });
 
       res.json({ success: true, prescriptionId: finalPrescriptionId });
@@ -1151,15 +1095,15 @@ const PORT = 3000;
         return;
       }
 
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
 
-      const consultData = consultSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -1168,59 +1112,51 @@ const PORT = 3000;
       }
 
       if (isUnassigned && decodedToken.role === 'doctor') {
-        await db.collection('consultations').doc(id).update({
-          assignedTo: decodedToken.uid,
-          updatedAt: new Date().toISOString()
-        });
+        const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+        await supabaseAdmin
+          .from('consultations')
+          .update({
+            assigned_to: decodedToken.uid,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
       }
 
-      const rxRef = db.collection('prescriptions').doc(prescriptionId);
-      const rxSnap = await rxRef.get();
+      const { prescriptionRepository } = await import('./src/server/repositories/prescriptionRepository');
+      const rx = await prescriptionRepository.getById(prescriptionId);
+      if (!rx) {
+        res.status(404).json({ error: 'Prescription not found' });
+        return;
+      }
       
-      if (rxSnap.data()?.status !== 'draft') {
+      if (rx.status !== 'draft') {
         res.status(400).json({ error: 'Prescription is already finalized or cancelled' });
         return;
       }
 
-      const timestamp = new Date().toISOString();
-      await rxRef.update({
-        status: 'finalized',
-        finalizedAt: timestamp,
-        updatedAt: timestamp
-      });
+      await prescriptionRepository.finalize(prescriptionId, decodedToken.uid);
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'PRESCRIPTION_FINALIZED',
         actorUid: decodedToken.uid,
         consultationId: id,
-        prescriptionId,
-        timestamp
+        metadata: { prescriptionId }
       });
       
       // Auto-generate the prescription document
       try {
-        await generatePrescriptionDocument(db, prescriptionId, decodedToken.uid);
+        await generatePrescriptionDocument(null, prescriptionId, decodedToken.uid);
       } catch (docErr) {
         console.error('Error auto-generating prescription document:', docErr);
       }
 
       // Timeline & Notification
       try {
-        const { TimelineService } = await import('./src/server/timeline');
         const { NotificationService } = await import('./src/server/notifications');
-        const timeline = new TimelineService();
         const notifService = new NotificationService();
-        const patientId = consultSnap.data()?.patientId;
-
-        // Note: Timeline events normally need an orderId. We'll use the prescriptionId 
-        // initially as a placeholder or we just send the notification until the order is created.
-        // Wait, the requirement says "Prescription finalized" is a timeline event for the order. 
-        // But the order isn't created until the patient clicks "Proceed to Payment" (which creates the order).
-        // If we don't have an orderId yet, we can't create an order_events document.
-        // We will just create the notification for PRESCRIPTION_READY.
-        
         await notifService.createNotification({
-          patientId,
+          patientId: consultData.patient_id,
           type: 'PRESCRIPTION_READY',
           title: 'Prescription Ready',
           shortMessage: 'Your prescription has been finalized by your doctor. You can now proceed to checkout.',
@@ -1251,14 +1187,14 @@ const PORT = 3000;
         return;
       }
 
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
-      const consultData = consultSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -1266,20 +1202,22 @@ const PORT = 3000;
         return;
       }
 
-      const rxRef = db.collection('prescriptions').doc(prescriptionId);
-      
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
       const timestamp = new Date().toISOString();
-      await rxRef.update({
-        status: 'cancelled',
-        updatedAt: timestamp
-      });
+      await supabaseAdmin
+        .from('prescriptions')
+        .update({
+          status: 'cancelled',
+          updated_at: timestamp
+        })
+        .eq('id', prescriptionId);
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'PRESCRIPTION_CANCELLED',
         actorUid: decodedToken.uid,
         consultationId: id,
-        prescriptionId,
-        timestamp
+        metadata: { prescriptionId }
       });
 
       res.json({ success: true });
@@ -1295,32 +1233,35 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
 
-      const consultRef = db.collection('consultations').doc(id);
-      const consultSnap = await consultRef.get();
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
 
-      if (!consultSnap.exists) {
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
 
-      const consultData = consultSnap.data() as any;
-      if (consultData.assignedTo !== decodedToken.uid && decodedToken.role !== 'admin') {
+      if (consultData.assigned_to !== decodedToken.uid && decodedToken.role !== 'admin') {
         res.status(403).json({ error: 'Forbidden: You are not assigned to this consultation' });
         return;
       }
 
       const timestamp = new Date().toISOString();
-      await consultRef.update({
-        status: 'completed',
-        completedAt: timestamp,
-        updatedAt: timestamp
-      });
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+      await supabaseAdmin
+        .from('consultations')
+        .update({
+          status: 'completed',
+          completed_at: timestamp,
+          updated_at: timestamp
+        })
+        .eq('id', id);
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'CONSULTATION_COMPLETED',
         actorUid: decodedToken.uid,
-        consultationId: id,
-        timestamp
+        consultationId: id
       });
 
       try {
@@ -1337,9 +1278,9 @@ const PORT = 3000;
           actorId: decodedToken.uid
         });
 
-        if (consultData.patientId) {
+        if (consultData.patient_id) {
           await notifService.createNotification({
-            patientId: consultData.patientId,
+            patientId: consultData.patient_id,
             type: 'CONSULTATION_COMPLETED',
             title: 'Consultation Complete',
             shortMessage: 'Your physician has completed reviewing your medical consultation and updated your treatment plan.',
@@ -1369,15 +1310,15 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
       
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
       
-      const consultData = consultSnap.data();
-      const isAssigned = consultData?.assignedTo === decodedToken.uid;
-      const isUnassigned = !consultData?.assignedTo;
+      const isAssigned = consultData.assigned_to === decodedToken.uid;
+      const isUnassigned = !consultData.assigned_to;
       const isAdmin = decodedToken.role === 'admin';
 
       if (!isAssigned && !isUnassigned && !isAdmin) {
@@ -1385,7 +1326,8 @@ const PORT = 3000;
         return;
       }
 
-      const documentId = await generateConsultationDocument(db, id, decodedToken.uid);
+      const { generateConsultationDocument } = await import('./src/server/documentService');
+      const documentId = await generateConsultationDocument(null, id, decodedToken.uid);
       res.json({ success: true, documentId });
     } catch (err: any) {
       console.error('Error generating consultation document:', err);
@@ -1405,15 +1347,15 @@ const PORT = 3000;
         return;
       }
 
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const rxConsultData = await consultationRepository.getById(id);
+      if (!rxConsultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
       
-      const rxConsultData = consultSnap.data();
-      const isRxAssigned = rxConsultData?.assignedTo === decodedToken.uid;
-      const isRxUnassigned = !rxConsultData?.assignedTo;
+      const isRxAssigned = rxConsultData.assigned_to === decodedToken.uid;
+      const isRxUnassigned = !rxConsultData.assigned_to;
       const isRxAdmin = decodedToken.role === 'admin';
 
       if (!isRxAssigned && !isRxUnassigned && !isRxAdmin) {
@@ -1421,7 +1363,8 @@ const PORT = 3000;
         return;
       }
 
-      const documentId = await generatePrescriptionDocument(db, prescriptionId, decodedToken.uid);
+      const { generatePrescriptionDocument } = await import('./src/server/documentService');
+      const documentId = await generatePrescriptionDocument(null, prescriptionId, decodedToken.uid);
       res.json({ success: true, documentId });
     } catch (err: any) {
       console.error('Error generating prescription document:', err);
@@ -1435,15 +1378,15 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
       
-      const consultSnap = await db.collection('consultations').doc(id).get();
-      if (!consultSnap.exists) {
+      const { consultationRepository } = await import('./src/server/repositories/consultationRepository');
+      const consultData = await consultationRepository.getById(id);
+      if (!consultData) {
         res.status(404).json({ error: 'Consultation not found' });
         return;
       }
 
-      const consultData = consultSnap.data();
-      const isPatient = decodedToken.uid === consultData?.patientId;
-      const isAssignedDoctor = decodedToken.uid === consultData?.assignedTo;
+      const isPatient = decodedToken.uid === consultData.patient_id;
+      const isAssignedDoctor = decodedToken.uid === consultData.assigned_to;
       const isDoctorRole = decodedToken.role === 'doctor';
       const isAdmin = decodedToken.role === 'admin';
 
@@ -1452,33 +1395,32 @@ const PORT = 3000;
         return;
       }
 
-      // Fetch active consultation docs
-      const consultDocsSnap = await db.collection('documents')
-        .where('sourceEntityId', '==', id)
-        .where('documentType', '==', 'consultation')
-        .where('status', '==', 'active')
-        .get();
+      const { documentRepository } = await import('./src/server/repositories/documentRepository');
+      const { prescriptionRepository } = await import('./src/server/repositories/prescriptionRepository');
 
-      // Fetch active prescription docs
-      // First get prescriptions for this consultation
-      const rxSnap = await db.collection('prescriptions')
-        .where('consultationId', '==', id)
-        .get();
-        
-      const rxIds = rxSnap.docs.map(doc => doc.id);
-      
-      let rxDocsSnap = { docs: [] as any[] };
-      if (rxIds.length > 0) {
-        rxDocsSnap = await db.collection('documents')
-          .where('sourceEntityId', 'in', rxIds)
-          .where('documentType', '==', 'prescription')
-          .where('status', '==', 'active')
-          .get() as any;
+      const consultDocs = await documentRepository.listByConsultation(id);
+      const activeConsultDocs = consultDocs.filter(d => d.status === 'active');
+
+      const prescriptions = await prescriptionRepository.getByConsultationId(id);
+      let rxDocs: any[] = [];
+      for (const rx of prescriptions) {
+        const rxDocsForId = await documentRepository.listByPrescription(rx.id);
+        rxDocs = rxDocs.concat(rxDocsForId.filter(d => d.status === 'active'));
       }
 
-      const documents = [...consultDocsSnap.docs, ...rxDocsSnap.docs].map(doc => ({
-        id: doc.id,
-        ...doc.data()
+      const documents = [...activeConsultDocs, ...rxDocs].map(doc => ({
+        id: doc.legacy_document_id || doc.id,
+        legacyDocumentId: doc.legacy_document_id,
+        documentType: doc.document_type,
+        sourceEntityId: doc.source_entity_id,
+        patientId: doc.patient_id,
+        doctorId: doc.doctor_id,
+        storagePath: doc.storage_path,
+        fileSize: doc.file_size,
+        version: doc.version,
+        status: doc.status,
+        createdAt: doc.created_at,
+        generatedBy: doc.generated_by
       }));
 
       res.json({ documents });
@@ -1494,49 +1436,47 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
       
-      let finalDocId = id;
-      let docSnap = await db.collection('documents').doc(id).get();
-      if (!docSnap.exists) {
-        // Fallback: check if id is a prescriptionId
-        const byRx = await db.collection('documents').where('prescriptionId', '==', id).limit(1).get();
-        if (!byRx.empty) {
-          docSnap = byRx.docs[0];
-          finalDocId = docSnap.id;
+      const { documentRepository } = await import('./src/server/repositories/documentRepository');
+      let docRecord = await documentRepository.getById(id) || await documentRepository.getByLegacyId(id);
+      if (!docRecord) {
+        const { prescriptionRepository } = await import('./src/server/repositories/prescriptionRepository');
+        const rx = await prescriptionRepository.getById(id);
+        if (rx) {
+          const docs = await documentRepository.listByPrescription(id);
+          docRecord = docs[0] || null;
         } else {
-          // Fallback: check if id is a consultationId
-          const byConsult = await db.collection('documents').where('consultationId', '==', id).limit(1).get();
-          if (!byConsult.empty) {
-            docSnap = byConsult.docs[0];
-            finalDocId = docSnap.id;
-          } else {
-            res.status(404).json({ error: 'Document not found' });
-            return;
-          }
+          const docs = await documentRepository.listByConsultation(id);
+          docRecord = docs[0] || null;
         }
       }
 
-      const docData = docSnap.data();
-      const isPatient = decodedToken.uid === docData?.patientId;
-      const isAssignedDoctor = decodedToken.uid === docData?.doctorId;
+      if (!docRecord) {
+        res.status(404).json({ error: 'Document not found' });
+        return;
+      }
+
+      const isPatient = decodedToken.uid === docRecord.patient_id;
+      const isAssignedDoctor = decodedToken.uid === docRecord.doctor_id;
       const isAdmin = decodedToken.role === 'admin';
-      const isPharmacist = decodedToken.role === 'pharmacist' || (await db.collection('users').doc(decodedToken.uid).get()).data()?.role === 'pharmacist';
+      const isPharmacist = decodedToken.role === 'pharmacist';
 
       if (!isPatient && !isAssignedDoctor && !isAdmin && !isPharmacist) {
         res.status(403).json({ error: 'Forbidden' });
         return;
       }
 
-      const { buffer, metadata } = await getDocumentStream(db, finalDocId);
+      const { getDocumentStream } = await import('./src/server/documentService');
+      const { buffer, metadata } = await getDocumentStream(null, docRecord.legacy_document_id || docRecord.id);
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'DOCUMENT_ACCESSED',
         actorUid: decodedToken.uid,
-        documentId: finalDocId,
-        timestamp: new Date().toISOString()
+        metadata: { documentId: docRecord.id }
       });
 
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${metadata.documentType}_${finalDocId}.pdf"`);
+      res.setHeader('Content-Disposition', `inline; filename="${metadata.documentType}_${docRecord.id}.pdf"`);
       res.send(buffer);
     } catch (err: any) {
       console.error('Error downloading document:', err);
@@ -1552,12 +1492,38 @@ const PORT = 3000;
   app.get('/api/orders', requireAuth, async (req, res) => {
     try {
       const decodedToken = (req as any).user;
-      const snap = await db.collection('orders')
-        .where('patientId', '==', decodedToken.uid)
-        .orderBy('createdAt', 'desc')
-        .get();
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const dbOrders = await orderRepository.listByPatient(decodedToken.uid);
 
-      const orders = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const orders = dbOrders.map(order => ({
+        id: order.id,
+        legacyOrderId: order.legacy_order_id,
+        patientId: order.patient_id,
+        prescriptionId: order.prescription_id,
+        subtotal: order.subtotal,
+        shippingAmount: order.shipping_amount,
+        taxAmount: order.tax_amount,
+        totalAmount: order.total_amount,
+        status: order.fulfillment_status === 'unfulfilled' && order.payment_status === 'pending' ? 'pending_payment' : order.fulfillment_status,
+        paymentStatus: order.payment_status,
+        fulfillmentStatus: order.fulfillment_status,
+        shippingAddress: order.shipping_address,
+        carrier: order.carrier,
+        trackingNumber: order.tracking_number,
+        paidAt: order.paid_at,
+        shippedAt: order.shipped_at,
+        deliveredAt: order.delivered_at,
+        createdAt: order.created_at,
+        updatedAt: order.updated_at,
+        medications: (order.items || []).map(item => ({
+          medicationName: item.medication_name,
+          activeIngredient: item.active_ingredient,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          totalPrice: item.total_price
+        }))
+      }));
+
       res.json({ orders });
     } catch (err: any) {
       console.error('Error fetching orders:', err);
@@ -1570,114 +1536,198 @@ const PORT = 3000;
     try {
       const { prescriptionId } = req.body;
       const decodedToken = (req as any).user;
-
+ 
       if (!prescriptionId) {
         return res.status(400).json({ error: 'prescriptionId is required' });
       }
-
-      const rxSnap = await db.collection('prescriptions').doc(prescriptionId).get();
-      if (!rxSnap.exists) {
+ 
+      const { prescriptionRepository } = await import('./src/server/repositories/prescriptionRepository');
+      const prescription = await prescriptionRepository.getById(prescriptionId);
+      if (!prescription) {
         return res.status(404).json({ error: 'Prescription not found' });
       }
-
-      const prescription = rxSnap.data() as any;
-
-      if (prescription.patientId !== decodedToken.uid) {
+ 
+      if (prescription.patient_id !== decodedToken.uid) {
         return res.status(403).json({ error: 'Forbidden' });
       }
-
+ 
       if (prescription.status !== 'finalized') {
         return res.status(400).json({ error: 'Cannot create order from an unfinalized prescription' });
       }
-
+ 
       // Check if an order already exists for this prescription
-      const existingOrderSnap = await db.collection('orders')
-        .where('prescriptionId', '==', prescriptionId)
-        .limit(1)
-        .get();
-
-      if (!existingOrderSnap.empty) {
-        const orderDoc = existingOrderSnap.docs[0];
-        return res.json({ success: true, orderId: orderDoc.id, order: { id: orderDoc.id, ...orderDoc.data() } });
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+      const { data: existingOrder } = await supabaseAdmin
+        .from('orders')
+        .select('*')
+        .eq('prescription_id', prescriptionId)
+        .maybeSingle();
+ 
+      if (existingOrder) {
+        const { orderRepository } = await import('./src/server/repositories/orderRepository');
+        const fullOrder = await orderRepository.getById(existingOrder.id);
+        if (fullOrder) {
+          const mapped = {
+            id: fullOrder.id,
+            legacyOrderId: fullOrder.legacy_order_id,
+            patientId: fullOrder.patient_id,
+            prescriptionId: fullOrder.prescription_id,
+            subtotal: fullOrder.subtotal,
+            shippingAmount: fullOrder.shipping_amount,
+            taxAmount: fullOrder.tax_amount,
+            totalAmount: fullOrder.total_amount,
+            paymentStatus: fullOrder.payment_status,
+            fulfillmentStatus: fullOrder.fulfillment_status,
+            shippingAddress: fullOrder.shipping_address,
+            createdAt: fullOrder.created_at,
+            updatedAt: fullOrder.updated_at,
+            medications: (fullOrder.items || []).map(item => ({
+              medicationName: item.medication_name,
+              activeIngredient: item.active_ingredient,
+              quantity: item.quantity,
+              unitPrice: item.unit_price,
+              totalPrice: item.total_price
+            }))
+          };
+          return res.json({ success: true, orderId: fullOrder.id, order: mapped });
+        }
       }
-
+ 
       // Fetch patient's shipping address
-      const userSnap = await db.collection('users').doc(decodedToken.uid).get();
-      const userData = userSnap.data() || {};
-      const shippingAddress = userData.shipping || {};
+      const { profileRepository } = await import('./src/server/repositories/profileRepository');
+      const profile = await profileRepository.getProfileById(decodedToken.uid);
+      const shippingAddress = profile?.shipping_address || {};
       
       // Calculate totals
-      const totals = calculateOrderTotals(prescription.medications || []);
-      const timestamp = new Date().toISOString();
+      const mappedMedications = (prescription.items || []).map(item => ({
+        medicationName: item.medication_name,
+        activeIngredient: item.active_ingredient || '',
+        strength: item.strength || '',
+        dosageForm: item.dosage_form || 'tablet',
+        quantity: item.quantity,
+        unitPrice: Number(item.unit_price)
+      }));
 
-      const newOrder = {
-        patientId: decodedToken.uid,
-        prescriptionId,
-        consultationId: prescription.consultationId,
-        status: 'pending_payment',
-        paymentStatus: 'unpaid',
-        fulfillmentStatus: 'unpaid',
-        shippingAddress,
-        currency: 'USD',
-        ...totals,
-        createdAt: timestamp,
-        updatedAt: timestamp
+      const totals = calculateOrderTotals(mappedMedications);
+      const timestamp = new Date().toISOString();
+      const newOrderId = `ord_${Math.random().toString(36).substring(2, 11)}`;
+ 
+      const newDbOrder = {
+        id: newOrderId,
+        patient_id: decodedToken.uid,
+        prescription_id: prescriptionId,
+        subtotal: totals.subtotal,
+        shipping_amount: totals.shippingAmount,
+        tax_amount: totals.taxAmount,
+        total_amount: totals.totalAmount,
+        payment_status: 'pending' as const,
+        fulfillment_status: 'unfulfilled' as const,
+        shipping_address: shippingAddress,
       };
 
-      const orderRef = await db.collection('orders').add(newOrder);
-
-      await db.collection('audit_logs').add({
+      const itemsToInsert = (prescription.items || []).map(item => ({
+        medication_name: item.medication_name,
+        active_ingredient: item.active_ingredient,
+        quantity: item.quantity,
+        unit_price: Number(item.unit_price),
+        total_price: item.quantity * Number(item.unit_price)
+      }));
+ 
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const created = await orderRepository.createOrder(newDbOrder, itemsToInsert);
+ 
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'ORDER_CREATED',
         actorUid: decodedToken.uid,
-        orderId: orderRef.id,
-        prescriptionId,
-        timestamp
+        consultationId: prescription.consultation_id || undefined,
+        metadata: { orderId: created.id, prescriptionId }
       });
+ 
+      const mappedOrder = {
+        id: created.id,
+        patientId: created.patient_id,
+        prescriptionId: created.prescription_id,
+        subtotal: created.subtotal,
+        shippingAmount: created.shipping_amount,
+        taxAmount: created.tax_amount,
+        totalAmount: created.total_amount,
+        paymentStatus: created.payment_status,
+        fulfillmentStatus: created.fulfillment_status,
+        shippingAddress: created.shipping_address,
+        createdAt: created.created_at,
+        updatedAt: created.updated_at,
+        medications: (created.items || []).map(item => ({
+          medicationName: item.medication_name,
+          activeIngredient: item.active_ingredient,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          totalPrice: item.total_price
+        }))
+      };
 
-      res.json({ success: true, orderId: orderRef.id, order: { id: orderRef.id, ...newOrder } });
+      res.json({ success: true, orderId: created.id, order: mappedOrder });
     } catch (err: any) {
       console.error('Error creating order:', err);
       res.status(500).json({ error: 'Internal Error' });
     }
   });
-
+ 
   // Create a Checkout Session
   app.post('/api/orders/:id/checkout', requireAuth, async (req, res) => {
     try {
       const { id } = req.params;
       const decodedToken = (req as any).user;
-
-      const orderSnap = await db.collection('orders').doc(id).get();
-      if (!orderSnap.exists) {
+ 
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const order = await orderRepository.getById(id);
+      if (!order) {
         return res.status(404).json({ error: 'Order not found' });
       }
-
-      const order = orderSnap.data() as any;
-
-      if (order.patientId !== decodedToken.uid) {
+ 
+      if (order.patient_id !== decodedToken.uid) {
         return res.status(403).json({ error: 'Forbidden' });
       }
-
-      if (order.paymentStatus === 'paid') {
+ 
+      if (order.payment_status === 'paid') {
         return res.status(400).json({ error: 'Order is already paid' });
       }
+ 
+      // Stripe expects orderData in camelCase format
+      const orderDataForStripe = {
+        subtotal: order.subtotal,
+        shippingAmount: order.shipping_amount,
+        taxAmount: order.tax_amount,
+        totalAmount: order.total_amount,
+        lineItems: (order.items || []).map(item => ({
+          medicationName: item.medication_name,
+          activeIngredient: item.active_ingredient,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          totalPrice: item.total_price
+        }))
+      };
 
       const paymentProvider = new StripePaymentProvider();
-      const session = await paymentProvider.createPaymentSession(id, order);
-
-      // We could store the payment reference
-      await db.collection('orders').doc(id).update({
-        paymentReference: session.paymentReference,
-        updatedAt: new Date().toISOString()
-      });
-
-      await db.collection('audit_logs').add({
+      const session = await paymentProvider.createPaymentSession(id, orderDataForStripe);
+ 
+      // Update payment reference
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+      await supabaseAdmin
+        .from('orders')
+        .update({
+          payment_reference: session.paymentReference,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+ 
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'PAYMENT_CHECKOUT_CREATED',
         actorUid: decodedToken.uid,
-        orderId: id,
-        timestamp: new Date().toISOString()
+        metadata: { orderId: id }
       });
-
+ 
       try {
         const { TimelineService } = await import('./src/server/timeline');
         const timeline = new TimelineService();
@@ -1691,7 +1741,7 @@ const PORT = 3000;
       } catch (err) {
         console.error('Error creating timeline event:', err);
       }
-
+ 
       res.json({ url: session.url });
     } catch (err: any) {
       console.error('Error creating checkout session:', err);
@@ -1704,7 +1754,7 @@ const PORT = 3000;
   });
 
   // Webhook Receiver
-    app.post('/api/webhooks/payment', async (req, res) => {
+  app.post('/api/webhooks/payment', async (req, res) => {
     try {
       const payload = (req as any).rawBody || JSON.stringify(req.body);
       const signature = req.headers['stripe-signature'] as string;
@@ -1733,8 +1783,9 @@ const PORT = 3000;
       const eventId = event.id;
 
       // Idempotency check for event
-      const eventSnap = await db.collection('payment_events').doc(eventId).get();
-      if (eventSnap.exists) {
+      const { paymentEventRepository } = await import('./src/server/repositories/paymentEventRepository');
+      const existingEvent = await paymentEventRepository.getEventByProviderEventId(eventId);
+      if (existingEvent) {
         return res.json({ received: true });
       }
 
@@ -1754,10 +1805,14 @@ const PORT = 3000;
             30
           );
           
-          await db.collection('payment_events').doc(eventId).set({
-            processedAt: new Date().toISOString(),
-            type: eventType,
-            subscriptionId
+          await paymentEventRepository.recordPaymentEvent({
+            event_id: eventId,
+            event_type: eventType,
+            status: 'processed',
+            metadata: {
+              processedAt: new Date().toISOString(),
+              subscriptionId
+            }
           });
           return res.json({ received: true });
         }
@@ -1772,10 +1827,14 @@ const PORT = 3000;
         if (subscriptionId) {
           await subService.handlePaymentSucceeded(subscriptionId, event.data.object.id, billingReason);
         }
-        await db.collection('payment_events').doc(eventId).set({
-          processedAt: new Date().toISOString(),
-          type: eventType,
-          subscriptionId
+        await paymentEventRepository.recordPaymentEvent({
+          event_id: eventId,
+          event_type: eventType,
+          status: 'processed',
+          metadata: {
+            processedAt: new Date().toISOString(),
+            subscriptionId
+          }
         });
         return res.json({ received: true });
       }
@@ -1787,10 +1846,14 @@ const PORT = 3000;
         if (subscriptionId) {
           await subService.handlePaymentFailed(subscriptionId, event.data.object.id);
         }
-        await db.collection('payment_events').doc(eventId).set({
-          processedAt: new Date().toISOString(),
-          type: eventType,
-          subscriptionId
+        await paymentEventRepository.recordPaymentEvent({
+          event_id: eventId,
+          event_type: eventType,
+          status: 'processed',
+          metadata: {
+            processedAt: new Date().toISOString(),
+            subscriptionId
+          }
         });
         return res.json({ received: true });
       }
@@ -1800,10 +1863,14 @@ const PORT = 3000;
         const subService = new SubscriptionService();
         const subscriptionId = event.data.object.id;
         await subService.handleSubscriptionCancelled(subscriptionId);
-        await db.collection('payment_events').doc(eventId).set({
-          processedAt: new Date().toISOString(),
-          type: eventType,
-          subscriptionId
+        await paymentEventRepository.recordPaymentEvent({
+          event_id: eventId,
+          event_type: eventType,
+          status: 'processed',
+          metadata: {
+            processedAt: new Date().toISOString(),
+            subscriptionId
+          }
         });
         return res.json({ received: true });
       }
@@ -1815,36 +1882,37 @@ const PORT = 3000;
         return res.json({ received: true }); // Ignore irrelevant webhooks silently
       }
 
-      const orderRef = db.collection('orders').doc(orderId);
-      const orderSnap = await orderRef.get();
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const orderData = await orderRepository.getById(orderId);
       
-      if (!orderSnap.exists) {
+      if (!orderData) {
         return res.status(404).send('Order not found');
       }
 
-      const orderData = orderSnap.data() as any;
       const timestamp = new Date().toISOString();
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
 
-      if (orderData.paymentStatus !== 'paid' && orderData.paymentStatus !== 'refunded') {
+      if (orderData.payment_status !== 'paid' && orderData.payment_status !== 'refunded') {
         if (eventType === 'checkout.session.completed' || eventType === 'payment_intent.succeeded' || eventType === 'mock.payment.success') {
-          await orderRef.update({
-            paymentStatus: 'paid',
-            status: 'processing', // Move to processing once paid
-            updatedAt: timestamp
+          await supabaseAdmin.from('orders').update({
+            payment_status: 'paid',
+            fulfillment_status: 'processing', // Move to processing once paid
+            updated_at: timestamp
+          }).eq('id', orderId);
+
+          await paymentEventRepository.recordPaymentEvent({
+            event_id: eventId,
+            event_type: eventType,
+            order_id: orderId,
+            status: 'processed',
+            metadata: { processedAt: timestamp }
           });
 
-          await db.collection('payment_events').doc(eventId).set({
-            processedAt: timestamp,
-            orderId,
-            type: eventType
-          });
-
-          await db.collection('audit_logs').add({
+          const { auditRepository } = await import('./src/server/repositories/auditRepository');
+          await auditRepository.log({
             action: 'PAYMENT_CONFIRMED',
             actorUid: 'system',
-            orderId,
-            eventId,
-            timestamp
+            metadata: { orderId, eventId }
           });
 
           try {
@@ -1863,7 +1931,7 @@ const PORT = 3000;
             });
 
             await notifService.createNotification({
-              patientId: orderData.patientId,
+              patientId: orderData.patient_id,
               type: 'PAYMENT_CONFIRMED',
               title: 'Payment Confirmed',
               shortMessage: 'Your payment was successful. We are now processing your order.',
@@ -1878,24 +1946,25 @@ const PORT = 3000;
       }
 
       if (eventType === 'charge.refunded') {
-        await orderRef.update({
-          paymentStatus: 'refunded',
-          status: 'cancelled',
-          updatedAt: timestamp
+        await supabaseAdmin.from('orders').update({
+          payment_status: 'refunded',
+          fulfillment_status: 'cancelled',
+          updated_at: timestamp
+        }).eq('id', orderId);
+
+        await paymentEventRepository.recordPaymentEvent({
+          event_id: eventId,
+          event_type: eventType,
+          order_id: orderId,
+          status: 'processed',
+          metadata: { processedAt: timestamp }
         });
 
-        await db.collection('payment_events').doc(eventId).set({
-          processedAt: timestamp,
-          orderId,
-          type: eventType
-        });
-
-        await db.collection('audit_logs').add({
+        const { auditRepository } = await import('./src/server/repositories/auditRepository');
+        await auditRepository.log({
           action: 'PAYMENT_REFUNDED',
           actorUid: 'system',
-          orderId,
-          eventId,
-          timestamp
+          metadata: { orderId, eventId }
         });
 
         try {
@@ -1914,23 +1983,24 @@ const PORT = 3000;
       }
 
       if (eventType === 'payment_intent.payment_failed') {
-        await orderRef.update({
-          paymentStatus: 'failed',
-          updatedAt: timestamp
+        await supabaseAdmin.from('orders').update({
+          payment_status: 'failed',
+          updated_at: timestamp
+        }).eq('id', orderId);
+
+        await paymentEventRepository.recordPaymentEvent({
+          event_id: eventId,
+          event_type: eventType,
+          order_id: orderId,
+          status: 'processed',
+          metadata: { processedAt: timestamp }
         });
 
-        await db.collection('payment_events').doc(eventId).set({
-          processedAt: timestamp,
-          orderId,
-          type: eventType
-        });
-
-        await db.collection('audit_logs').add({
+        const { auditRepository } = await import('./src/server/repositories/auditRepository');
+        await auditRepository.log({
           action: 'PAYMENT_FAILED',
           actorUid: 'system',
-          orderId,
-          eventId,
-          timestamp
+          metadata: { orderId, eventId }
         });
       }
 
@@ -2064,16 +2134,6 @@ const PORT = 3000;
           createdAt: profile.created_at,
           updatedAt: profile.updated_at,
         });
-      }
-
-      // 2. Fallback to Firestore if profile exists there
-      try {
-        const userDoc = await db.collection('users').doc(uid).get();
-        if (userDoc.exists) {
-          return res.json({ id: userDoc.id, uid: userDoc.id, ...userDoc.data() });
-        }
-      } catch (fbErr) {
-        // Firestore unavailable / mock
       }
 
       // 3. Fallback to token information if newly authenticated
@@ -2264,27 +2324,6 @@ const PORT = 3000;
         updatedProfile = inserted;
       }
 
-      // Legacy Firebase mirroring (only for legacy Firebase-authenticated sessions)
-      if (decodedToken.authProvider === 'firebase') {
-        try {
-          const firestoreUpdates: Record<string, any> = {
-            updatedAt: new Date().toISOString(),
-          };
-          if (firstName !== undefined) firestoreUpdates.firstName = typeof firstName === 'string' ? firstName.trim() : firstName;
-          if (lastName !== undefined) firestoreUpdates.lastName = typeof lastName === 'string' ? lastName.trim() : lastName;
-          if (dateOfBirth !== undefined) firestoreUpdates.dateOfBirth = dateOfBirth;
-          if (sex !== undefined) firestoreUpdates.sex = sex;
-          if (phone !== undefined || phoneNumber !== undefined) firestoreUpdates.phone = supabaseUpdates.phone_number;
-          if (shippingAddress !== undefined && typeof shippingAddress === 'object') {
-            firestoreUpdates.shippingAddress = supabaseUpdates.shipping_address;
-          }
-
-          await db.collection('users').doc(uid).set(firestoreUpdates, { merge: true });
-        } catch (fbErr) {
-          // Firestore is optional / secondary
-        }
-      }
-
       // Record audit log entry in Supabase repository
       try {
         await supabaseAdmin.from('audit_logs').insert({
@@ -2334,12 +2373,13 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
       
-      const orderSnap = await db.collection('orders').doc(id).get();
-      if (!orderSnap.exists) {
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const order = await orderRepository.getById(id);
+      if (!order) {
         return res.status(404).json({ error: 'Order not found' });
       }
       
-      if (orderSnap.data()?.patientId !== decodedToken.uid && decodedToken.role !== 'admin') {
+      if (order.patient_id !== decodedToken.uid && decodedToken.role !== 'admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -2363,49 +2403,27 @@ const PORT = 3000;
       const uid = decodedToken.uid;
       const eligibleList: any[] = [];
 
-      // 1. Fetch from Supabase
-      try {
-        const { data: sbPres, error: sbErr } = await supabaseAdmin
-          .from('prescriptions')
-          .select('*')
-          .eq('patient_id', uid)
-          .eq('refill_eligible', true)
-          .in('status', ['finalized', 'active']);
+      const { data: sbPres, error: sbErr } = await supabaseAdmin
+        .from('prescriptions')
+        .select('*')
+        .eq('patient_id', uid)
+        .eq('refill_eligible', true)
+        .in('status', ['finalized', 'active']);
 
-        if (sbPres && !sbErr) {
-          sbPres.forEach(p => {
-            eligibleList.push({
-              id: p.id,
-              patientId: p.patient_id,
-              doctorId: p.doctor_id,
-              treatmentCategory: p.treatment_category || 'General Refill',
-              medications: p.medications || [],
-              refillIntervalDays: p.refill_interval_days || 30,
-              refillEligible: true,
-              status: p.status,
-              createdAt: p.created_at,
-            });
+      if (sbPres && !sbErr) {
+        sbPres.forEach(p => {
+          eligibleList.push({
+            id: p.id,
+            patientId: p.patient_id,
+            doctorId: p.doctor_id,
+            treatmentCategory: p.treatment_category || 'General Refill',
+            medications: p.medications || [],
+            refillIntervalDays: p.refill_interval_days || 30,
+            refillEligible: true,
+            status: p.status,
+            createdAt: p.created_at,
           });
-        }
-      } catch (err) {
-        console.warn('Supabase eligible prescriptions fetch warning:', err);
-      }
-
-      // 2. Fetch from Firestore if available
-      try {
-        const snap = await db.collection('prescriptions')
-          .where('patientId', '==', uid)
-          .where('refillEligible', '==', true)
-          .where('status', 'in', ['finalized', 'active'])
-          .get();
-          
-        snap.docs.forEach(d => {
-          if (!eligibleList.some(e => e.id === d.id)) {
-            eligibleList.push({ id: d.id, ...d.data() });
-          }
         });
-      } catch (fbErr) {
-        // Firestore fallback
       }
 
       res.json(eligibleList);
@@ -2455,31 +2473,55 @@ const PORT = 3000;
       const decodedToken = (req as any).user;
       const { prescriptionId } = req.body;
       
-      const prescriptionSnap = await db.collection('prescriptions').doc(prescriptionId).get();
-      if (!prescriptionSnap.exists) {
+      const { data: pData, error: pError } = await supabaseAdmin
+        .from('prescriptions')
+        .select('*')
+        .eq('id', prescriptionId)
+        .maybeSingle();
+
+      if (pError || !pData) {
         return res.status(404).json({ error: 'Prescription not found' });
       }
-      const pData = prescriptionSnap.data() as any;
 
-      if (pData.patientId !== decodedToken.uid) {
+      if (pData.patient_id !== decodedToken.uid) {
         return res.status(403).json({ error: 'Forbidden' });
       }
       
-      if (!pData.refillEligible || pData.status === 'cancelled') {
+      if (!pData.refill_eligible || pData.status === 'cancelled') {
         return res.status(400).json({ error: 'Prescription is not eligible for subscription' });
       }
 
-      const existingSub = await db.collection('subscriptions')
-        .where('sourcePrescriptionId', '==', prescriptionId)
-        .where('status', 'in', ['active', 'past_due', 'paused'])
-        .get();
-        
-      if (!existingSub.empty) {
+      const { data: existingSub, error: subError } = await supabaseAdmin
+        .from('subscriptions')
+        .select('*')
+        .eq('source_prescription_id', prescriptionId)
+        .in('status', ['active', 'past_due', 'paused']);
+         
+      if (subError) {
+        console.error('Error checking existing subscription:', subError);
+        return res.status(500).json({ error: 'Internal Error' });
+      }
+
+      if (existingSub && existingSub.length > 0) {
         return res.status(400).json({ error: 'Subscription already exists' });
       }
 
+      const pDataMapped = {
+        id: pData.id,
+        patientId: pData.patient_id,
+        refillIntervalDays: pData.refill_interval_days,
+        refillEligible: pData.refill_eligible,
+        status: pData.status,
+        medications: (pData.medications || []).map((m: any) => ({
+          medicationName: m.medicationName || m.medication_name,
+          activeIngredient: m.activeIngredient || m.active_ingredient,
+          quantity: m.quantity,
+          unitPrice: m.unitPrice || m.unit_price
+        }))
+      };
+
       const paymentProvider = new StripePaymentProvider();
-      const session = await paymentProvider.createSubscriptionSession(decodedToken.uid, decodedToken.email || '', prescriptionId, pData);
+      const session = await paymentProvider.createSubscriptionSession(decodedToken.uid, decodedToken.email || '', prescriptionId, pDataMapped);
       
       res.json({ url: session.url });
     } catch (error: any) {
@@ -2497,11 +2539,17 @@ const PORT = 3000;
       const decodedToken = (req as any).user;
       const { id } = req.params;
       
-      const subSnap = await db.collection('subscriptions').doc(id).get();
-      if (!subSnap.exists) return res.status(404).json({ error: 'Not found' });
+      const { data: subData, error: subError } = await supabaseAdmin
+        .from('subscriptions')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (subError || !subData) {
+        return res.status(404).json({ error: 'Not found' });
+      }
       
-      const subData = subSnap.data() as any;
-      if (subData.patientId !== decodedToken.uid && decodedToken.role !== 'admin') {
+      if (subData.patient_id !== decodedToken.uid && decodedToken.role !== 'admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -2511,8 +2559,7 @@ const PORT = 3000;
       const Stripe = require('stripe').default || require('stripe');
       const stripe = new Stripe(config.stripe.secretKey);
       
-      await stripe.subscriptions.cancel(subData.providerSubscriptionId);
-      // We do NOT update firestore here. The webhook will handle it.
+      await stripe.subscriptions.cancel(subData.provider_subscription_id);
       
       res.json({ success: true, message: 'Cancellation requested' });
     } catch (error) {
@@ -2524,19 +2571,38 @@ const PORT = 3000;
   app.get('/api/refill-requests', requireAuth, async (req, res) => {
     try {
       const decodedToken = (req as any).user;
-      let snap;
+      let data;
       if (decodedToken.role === 'doctor') {
-        snap = await db.collection('refill_requests')
-          .orderBy('createdAt', 'desc')
-          .get();
-          // Filter in code or with compound queries. For milestone, return all or doctor's patients.
+        const { data: list, error } = await supabaseAdmin
+          .from('refill_requests')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        data = list || [];
       } else {
-        snap = await db.collection('refill_requests')
-          .where('patientId', '==', decodedToken.uid)
-          .orderBy('createdAt', 'desc')
-          .get();
+        const { data: list, error } = await supabaseAdmin
+          .from('refill_requests')
+          .select('*')
+          .eq('patient_id', decodedToken.uid)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        data = list || [];
       }
-      res.json(snap.docs.map(d => d.data()));
+      
+      const mapped = data.map(r => ({
+        id: r.id,
+        patientId: r.patient_id,
+        sourcePrescriptionId: r.source_prescription_id,
+        subscriptionId: r.subscription_id,
+        status: r.status,
+        decisionReason: r.decision_reason,
+        resultingOrderId: r.resulting_order_id,
+        idempotencyKey: r.idempotency_key,
+        reviewedBy: r.reviewed_by,
+        reviewedAt: r.reviewed_at,
+        createdAt: r.created_at
+      }));
+      res.json(mapped);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: 'Internal Error' });
@@ -2549,18 +2615,28 @@ const PORT = 3000;
       const { id } = req.params;
       const { action, decisionReason } = req.body; // action: 'approve' | 'deny'
 
-      const reqRef = db.collection('refill_requests').doc(id);
-      const reqSnap = await reqRef.get();
-      if (!reqSnap.exists) return res.status(404).json({ error: 'Not found' });
-      const reqData = reqSnap.data() as any;
+      const reqSnap = await supabaseAdmin
+        .from('refill_requests')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (reqSnap.error || !reqSnap.data) return res.status(404).json({ error: 'Not found' });
+      const reqData = reqSnap.data;
       
       if (reqData.status !== 'pending_review') {
         return res.status(400).json({ error: 'Request is not pending review' });
       }
 
-      const pRef = db.collection('prescriptions').doc(reqData.sourcePrescriptionId);
-      const pSnap = await pRef.get();
-      const pData = pSnap.data() as any;
+      const { data: pData, error: pError } = await supabaseAdmin
+        .from('prescriptions')
+        .select('*')
+        .eq('id', reqData.source_prescription_id)
+        .maybeSingle();
+
+      if (pError || !pData) {
+        return res.status(404).json({ error: 'Prescription not found' });
+      }
 
       const timestamp = new Date().toISOString();
       let resultingOrderId = null;
@@ -2568,73 +2644,89 @@ const PORT = 3000;
       if (action === 'approve') {
         // Create new order
         const newOrderId = `ord_${Date.now()}`;
-        const { totalAmount, subtotal, taxAmount, shippingAmount, lineItems } = calculateOrderTotals(pData.medications);
+        const medicationsMapped = (pData.medications || []).map((m: any) => ({
+          medicationName: m.medicationName || m.medication_name,
+          activeIngredient: m.activeIngredient || m.active_ingredient,
+          quantity: m.quantity,
+          unitPrice: m.unitPrice || m.unit_price
+        }));
+
+        const { totalAmount, subtotal, taxAmount, shippingAmount, lineItems } = calculateOrderTotals(medicationsMapped);
         
-        // Fetch patient shipping info
-        const userSnap = await db.collection('users').doc(reqData.patientId).get();
-        const userData = userSnap.data();
+        const { data: userData } = await supabaseAdmin
+          .from('profiles')
+          .select('*')
+          .eq('id', reqData.patient_id)
+          .maybeSingle();
 
-        const isPrepaid = !!reqData.billingPaymentId || !!reqData.subscriptionInvoicePaid;
-        const initialPaymentStatus = isPrepaid ? 'paid' : 'unpaid';
-        const initialStatus = isPrepaid ? 'processing' : 'pending_payment';
-        const initialFulfillmentStatus = isPrepaid ? 'processing' : 'unpaid';
+        const isPrepaid = !!reqData.billing_payment_id || !!reqData.subscription_invoice_paid;
+        const initialPaymentStatus = isPrepaid ? 'paid' : 'pending';
+        const initialStatus = isPrepaid ? 'processing' : 'unfulfilled';
+        const initialFulfillmentStatus = isPrepaid ? 'processing' : 'unfulfilled';
 
-        const orderData = {
-          patientId: reqData.patientId,
-          prescriptionId: reqData.sourcePrescriptionId, // Or a new prescription version
-          status: initialStatus,
-          paymentStatus: initialPaymentStatus,
-          fulfillmentStatus: initialFulfillmentStatus,
-          shippingAddress: userData?.address || {},
-          lineItems,
+        const { orderRepository } = await import('./src/server/repositories/orderRepository');
+        await orderRepository.createOrder({
+          id: newOrderId,
+          patient_id: reqData.patient_id,
+          prescription_id: reqData.source_prescription_id,
+          payment_status: initialPaymentStatus as any,
+          fulfillment_status: initialFulfillmentStatus as any,
+          shipping_address: userData?.shipping_address || {},
           subtotal,
-          taxAmount,
-          shippingAmount,
-          totalAmount,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-          refillRequestId: id
-        };
+          tax_amount: taxAmount,
+          shipping_amount: shippingAmount,
+          total_amount: totalAmount,
+        }, lineItems.map((li: any) => ({
+          medication_name: li.medicationName,
+          active_ingredient: li.activeIngredient || null,
+          quantity: li.quantity,
+          unit_price: li.unitPrice,
+          total_price: li.totalPrice
+        })));
 
-        await db.collection('orders').doc(newOrderId).set(orderData);
         resultingOrderId = newOrderId;
 
-        await db.collection('audit_logs').add({
+        const { auditRepository } = await import('./src/server/repositories/auditRepository');
+        await auditRepository.log({
           action: 'REFILL_ORDER_CREATED',
           actorUid: decodedToken.uid,
           orderId: newOrderId,
-          refillRequestId: id,
-          paymentStatus: initialPaymentStatus,
-          status: initialStatus,
-          timestamp
+          metadata: {
+            refillRequestId: id,
+            paymentStatus: initialPaymentStatus,
+            status: initialStatus
+          }
         });
       }
 
       const newStatus = action === 'approve' ? 'approved' : 'denied';
 
-      await reqRef.update({
-        status: newStatus,
-        reviewedAt: timestamp,
-        reviewedBy: decodedToken.uid,
-        decisionReason: decisionReason || null,
-        resultingOrderId
-      });
+      await supabaseAdmin
+        .from('refill_requests')
+        .update({
+          status: newStatus,
+          reviewed_at: timestamp,
+          reviewed_by: decodedToken.uid,
+          decision_reason: decisionReason || null,
+          resulting_order_id: resultingOrderId
+        })
+        .eq('id', id);
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: action === 'approve' ? 'REFILL_APPROVED' : 'REFILL_DENIED',
         actorUid: decodedToken.uid,
-        refillRequestId: id,
-        timestamp
+        metadata: { refillRequestId: id }
       });
 
       // Notification
       const { NotificationService } = await import('./src/server/notifications');
       const notif = new NotificationService();
       await notif.createNotification({
-        patientId: reqData.patientId,
-        type: 'CONSULTATION_SUBMITTED', // Reusing generic type for now, or create new type
+        patientId: reqData.patient_id,
+        type: 'CONSULTATION_SUBMITTED',
         title: `Refill Request ${action === 'approve' ? 'Approved' : 'Denied'}`,
-        shortMessage: `Your refill request for ${pData.treatmentCategory || 'medication'} has been ${newStatus}.`,
+        shortMessage: `Your refill request for ${pData.treatment_category || 'medication'} has been ${newStatus}.`,
         relatedEntityId: id,
         relatedEntityType: 'document',
         idempotencyKey: `refill_dec_${id}`
@@ -2693,20 +2785,23 @@ const PORT = 3000;
 
       let isAuthorized = decodedToken.uid === id || ['doctor', 'pharmacist', 'admin'].includes(decodedToken.role);
       if (!isAuthorized) {
-        const threadSnap = await db.collection('message_threads')
-          .where('patientId', '==', decodedToken.uid)
-          .where('doctorId', '==', id)
-          .limit(1)
-          .get();
-        if (!threadSnap.empty) {
+        const { data: threads1 } = await supabaseAdmin
+          .from('message_threads')
+          .select('id')
+          .eq('patient_id', decodedToken.uid)
+          .eq('doctor_id', id)
+          .limit(1);
+          
+        if (threads1 && threads1.length > 0) {
           isAuthorized = true;
         } else {
-          const threadSnap2 = await db.collection('message_threads')
-            .where('doctorId', '==', decodedToken.uid)
-            .where('patientId', '==', id)
-            .limit(1)
-            .get();
-          if (!threadSnap2.empty) isAuthorized = true;
+          const { data: threads2 } = await supabaseAdmin
+            .from('message_threads')
+            .select('id')
+            .eq('doctor_id', decodedToken.uid)
+            .eq('patient_id', id)
+            .limit(1);
+          if (threads2 && threads2.length > 0) isAuthorized = true;
         }
       }
 
@@ -2714,42 +2809,37 @@ const PORT = 3000;
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      // 1. Try staff_profiles doc id
-      const staffDoc = await db.collection('staff_profiles').doc(id).get();
-      if (staffDoc.exists) {
-        const d = staffDoc.data() || {};
-        const displayName = `${d.firstName || ''} ${d.lastName || ''}`.trim() || d.displayName || 'Doctor';
+      // Fetch from unified profiles table (which contains both patient and staff profiles)
+      const { data: profile, error: pError } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .or(`id.eq.${id},firebase_uid.eq.${id}`)
+        .maybeSingle();
+
+      if (profile && !pError) {
+        const displayName = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || profile.display_name || 'User';
         return res.json({
-          id,
+          id: profile.id,
           displayName,
-          role: d.role || 'doctor',
-          avatarUrl: d.avatarUrl || null
+          role: profile.role,
+          avatarUrl: (profile as any).avatar_url || null
         });
       }
 
-      // 2. Try staff_profiles by uid
-      const staffByUid = await db.collection('staff_profiles').where('uid', '==', id).limit(1).get();
-      if (!staffByUid.empty) {
-        const d = staffByUid.docs[0].data() || {};
-        const displayName = `${d.firstName || ''} ${d.lastName || ''}`.trim() || d.displayName || 'Doctor';
-        return res.json({
-          id,
-          displayName,
-          role: d.role || 'doctor',
-          avatarUrl: d.avatarUrl || null
-        });
-      }
+      // If not in general profiles, check staff_profiles explicitly
+      const { data: staffProfile, error: spError } = await supabaseAdmin
+        .from('staff_profiles')
+        .select('*')
+        .or(`id.eq.${id},firebase_uid.eq.${id}`)
+        .maybeSingle();
 
-      // 3. Try users collection
-      const userDoc = await db.collection('users').doc(id).get();
-      if (userDoc.exists) {
-        const d = userDoc.data() || {};
-        const displayName = `${d.firstName || ''} ${d.lastName || ''}`.trim() || d.displayName || 'Patient';
+      if (staffProfile && !spError) {
+        const displayName = `${staffProfile.first_name || ''} ${staffProfile.last_name || ''}`.trim() || 'Staff';
         return res.json({
-          id,
+          id: staffProfile.id,
           displayName,
-          role: d.role || 'patient',
-          avatarUrl: d.avatarUrl || null
+          role: staffProfile.role,
+          avatarUrl: (staffProfile as any).avatar_url || null
         });
       }
 
@@ -2767,11 +2857,36 @@ const PORT = 3000;
   // Pharmacist: List Orders
   app.get('/api/pharmacist/orders', requirePharmacistAuth, async (req, res) => {
     try {
-      const snap = await db.collection('orders')
-        .orderBy('createdAt', 'desc')
-        .limit(100)
-        .get();
-      const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const dbOrders = await orderRepository.listForPharmacist();
+      const orders = dbOrders.map(order => ({
+        id: order.id,
+        legacyOrderId: order.legacy_order_id,
+        patientId: order.patient_id,
+        prescriptionId: order.prescription_id,
+        subtotal: order.subtotal,
+        shippingAmount: order.shipping_amount,
+        taxAmount: order.tax_amount,
+        totalAmount: order.total_amount,
+        status: order.fulfillment_status === 'unfulfilled' && order.payment_status === 'pending' ? 'pending_payment' : order.fulfillment_status,
+        paymentStatus: order.payment_status,
+        fulfillmentStatus: order.fulfillment_status,
+        shippingAddress: order.shipping_address,
+        carrier: order.carrier,
+        trackingNumber: order.tracking_number,
+        paidAt: order.paid_at,
+        shippedAt: order.shipped_at,
+        deliveredAt: order.delivered_at,
+        createdAt: order.created_at,
+        updatedAt: order.updated_at,
+        medications: (order.items || []).map(item => ({
+          medicationName: item.medication_name,
+          activeIngredient: item.active_ingredient,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          totalPrice: item.total_price
+        }))
+      }));
       res.json({ orders });
     } catch (err) {
       console.error('Error fetching pharmacist orders:', err);
@@ -2783,11 +2898,40 @@ const PORT = 3000;
   app.get('/api/pharmacist/orders/:id', requirePharmacistAuth, async (req, res) => {
     try {
       const { id } = req.params;
-      const orderSnap = await db.collection('orders').doc(id).get();
-      if (!orderSnap.exists) {
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const fullOrder = await orderRepository.getById(id);
+      if (!fullOrder) {
         return res.status(404).json({ error: 'Order not found' });
       }
-      res.json({ order: { id: orderSnap.id, ...orderSnap.data() } });
+      const mapped = {
+        id: fullOrder.id,
+        legacyOrderId: fullOrder.legacy_order_id,
+        patientId: fullOrder.patient_id,
+        prescriptionId: fullOrder.prescription_id,
+        subtotal: fullOrder.subtotal,
+        shippingAmount: fullOrder.shipping_amount,
+        taxAmount: fullOrder.tax_amount,
+        totalAmount: fullOrder.total_amount,
+        status: fullOrder.fulfillment_status === 'unfulfilled' && fullOrder.payment_status === 'pending' ? 'pending_payment' : fullOrder.fulfillment_status,
+        paymentStatus: fullOrder.payment_status,
+        fulfillmentStatus: fullOrder.fulfillment_status,
+        shippingAddress: fullOrder.shipping_address,
+        carrier: fullOrder.carrier,
+        trackingNumber: fullOrder.tracking_number,
+        paidAt: fullOrder.paid_at,
+        shippedAt: fullOrder.shipped_at,
+        deliveredAt: fullOrder.delivered_at,
+        createdAt: fullOrder.created_at,
+        updatedAt: fullOrder.updated_at,
+        medications: (fullOrder.items || []).map(item => ({
+          medicationName: item.medication_name,
+          activeIngredient: item.active_ingredient,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          totalPrice: item.total_price
+        }))
+      };
+      res.json({ order: mapped });
     } catch (err) {
       console.error('Error fetching pharmacist order:', err);
       res.status(500).json({ error: 'Internal Error' });
@@ -2801,29 +2945,28 @@ const PORT = 3000;
       const { status } = req.body;
       const decodedToken = (req as any).user;
 
-      const orderRef = db.collection('orders').doc(id);
-      const orderSnap = await orderRef.get();
-      if (!orderSnap.exists) {
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const order = await orderRepository.getById(id);
+      if (!order) {
         return res.status(404).json({ error: 'Order not found' });
       }
-      const order = orderSnap.data() as any;
 
-      if (order.paymentStatus !== 'paid') {
+      if (order.payment_status !== 'paid') {
         return res.status(400).json({ error: 'Cannot fulfill unpaid order. Payment must be confirmed first.' });
       }
 
       const timestamp = new Date().toISOString();
-      await orderRef.update({
-        fulfillmentStatus: status,
-        updatedAt: timestamp
-      });
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+      await supabaseAdmin.from('orders').update({
+        fulfillment_status: status,
+        updated_at: timestamp
+      }).eq('id', id);
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'ORDER_FULFILLMENT_STATUS_UPDATED',
         actorUid: decodedToken.uid,
-        orderId: id,
-        status,
-        timestamp
+        metadata: { orderId: id, status }
       });
 
       res.json({ success: true, fulfillmentStatus: status });
@@ -2839,14 +2982,13 @@ const PORT = 3000;
       const { id } = req.params;
       const decodedToken = (req as any).user;
 
-      const orderRef = db.collection('orders').doc(id);
-      const orderSnap = await orderRef.get();
-      if (!orderSnap.exists) {
+      const { orderRepository } = await import('./src/server/repositories/orderRepository');
+      const order = await orderRepository.getById(id);
+      if (!order) {
         return res.status(404).json({ error: 'Order not found' });
       }
-      const order = orderSnap.data() as any;
 
-      if (order.paymentStatus !== 'paid') {
+      if (order.payment_status !== 'paid') {
         return res.status(400).json({ error: 'Cannot ship unpaid order. Payment must be confirmed first.' });
       }
 
@@ -2858,19 +3000,20 @@ const PORT = 3000;
         shippedAt: timestamp
       };
 
-      await orderRef.update({
-        status: 'shipped',
-        fulfillmentStatus: 'shipped',
-        shipment,
-        updatedAt: timestamp
-      });
+      const { supabaseAdmin } = await import('./src/server/supabaseAdmin');
+      await supabaseAdmin.from('orders').update({
+        fulfillment_status: 'shipped',
+        carrier: shipment.carrier,
+        tracking_number: shipment.trackingNumber,
+        shipped_at: shipment.shippedAt,
+        updated_at: timestamp
+      }).eq('id', id);
 
-      await db.collection('audit_logs').add({
+      const { auditRepository } = await import('./src/server/repositories/auditRepository');
+      await auditRepository.log({
         action: 'ORDER_SHIPPED',
         actorUid: decodedToken.uid,
-        orderId: id,
-        trackingNumber,
-        timestamp
+        metadata: { orderId: id, trackingNumber }
       });
 
       try {
@@ -2889,7 +3032,7 @@ const PORT = 3000;
         });
 
         await notifService.createNotification({
-          patientId: order.patientId,
+          patientId: order.patient_id,
           type: 'ORDER_SHIPPED',
           title: 'Your Order Has Shipped',
           shortMessage: `Your order #${id} has shipped via ${shipment.carrier}. Tracking: ${trackingNumber}`,

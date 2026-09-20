@@ -1,191 +1,103 @@
-import { adminDb as db } from './firebaseAdmin';
+import { messageRepository } from './repositories/messageRepository';
+import { auditRepository } from './repositories/auditRepository';
 import { NotificationService } from './notifications';
+import { UserRole } from './auth/types';
 
 export class MessagingService {
   async ensureThread(patientId: string, doctorId: string, consultationId: string) {
-    // Check if an open thread already exists for this consultation
-    const existingSnap = await db.collection('message_threads')
-      .where('consultationId', '==', consultationId)
-      .where('status', '==', 'open')
-      .limit(1)
-      .get();
-      
-    if (!existingSnap.empty) {
-      return existingSnap.docs[0].id;
-    }
-
-    // Create a new thread
-    const threadId = `thread_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    const timestamp = new Date().toISOString();
-    
-    await db.collection('message_threads').doc(threadId).set({
-      threadId,
-      patientId,
-      doctorId,
-      consultationId,
-      status: 'open',
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      patientUnreadCount: 0,
-      doctorUnreadCount: 0,
-      lastMessagePreview: 'Conversation started.',
-      lastMessageAt: timestamp
-    });
-    
-    await db.collection('audit_logs').add({
-      action: 'MESSAGE_THREAD_CREATED',
-      actorUid: 'system',
-      threadId,
-      patientId,
-      doctorId,
-      consultationId,
-      timestamp
-    });
-
-    // Dual-write to Supabase message_threads
     try {
-      const { messageRepository } = await import('./repositories/messageRepository');
-      await messageRepository.ensureThread(patientId, doctorId, consultationId);
+      const threadId = await messageRepository.ensureThread(patientId, doctorId, consultationId);
+      
+      await auditRepository.log({
+        action: 'MESSAGE_THREAD_CREATED',
+        actorUid: 'system',
+        threadId,
+        consultationId,
+        metadata: { patientId, doctorId }
+      });
+
+      return threadId;
     } catch (err: any) {
-      console.warn('[MessagingService] Supabase ensureThread error:', err.message);
+      console.error('[MessagingService] Failed to ensure message thread:', err.message);
+      throw err;
     }
-
-    return threadId;
-
   }
 
   async sendMessage(threadId: string, senderUid: string, senderRole: 'patient' | 'doctor', text: string) {
-    const threadRef = db.collection('message_threads').doc(threadId);
-    
-    const threadSnap = await threadRef.get();
-    if (!threadSnap.exists) {
+    const thread = await messageRepository.getThread(threadId);
+    if (!thread) {
       throw new Error('Thread not found');
     }
-    
-    const threadData = threadSnap.data() as any;
-    if (threadData.status !== 'open') {
+    if (thread.status !== 'open') {
       throw new Error('Thread is closed');
     }
 
     // Verify sender
-    if (senderRole === 'patient' && threadData.patientId !== senderUid) {
+    if (senderRole === 'patient' && thread.patient_id !== senderUid) {
       throw new Error('Forbidden');
     }
-    if (senderRole === 'doctor' && threadData.doctorId !== senderUid) {
+    if (senderRole === 'doctor' && thread.doctor_id !== senderUid) {
       throw new Error('Forbidden');
     }
-    if (!text || text.trim().length === 0 || text.trim().length > 5000) {
+    
+    const trimmed = (text || '').trim();
+    if (trimmed.length === 0 || trimmed.length > 5000) {
       throw new Error('Invalid message length');
     }
 
-    const timestamp = new Date().toISOString();
-    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    
-    // Append message
-    await threadRef.collection('messages').doc(messageId).set({
-      messageId,
-      threadId,
-      senderUid,
-      senderRole,
-      messageText: text.trim(),
-      createdAt: timestamp,
-      readAt: null
-    });
-
-    // Update thread summary and unread counts
-    const isPatient = senderRole === 'patient';
-    await threadRef.update({
-      updatedAt: timestamp,
-      lastMessageAt: timestamp,
-      lastMessagePreview: text.trim().substring(0, 100),
-      // increment recipient unread count
-      patientUnreadCount: isPatient ? threadData.patientUnreadCount : (threadData.patientUnreadCount || 0) + 1,
-      doctorUnreadCount: isPatient ? (threadData.doctorUnreadCount || 0) + 1 : threadData.doctorUnreadCount
-    });
-
-    // Audit log (metadata only)
-    await db.collection('audit_logs').add({
-      action: 'MESSAGE_SENT',
-      actorUid: senderUid,
-      threadId,
-      messageId,
-      timestamp
-    });
-
-    // Dual-write message to Supabase
     try {
-      const { messageRepository } = await import('./repositories/messageRepository');
-      await messageRepository.addMessage({
+      const { messageId, createdAt } = await messageRepository.addMessage({
         threadId,
         senderUid,
-        senderRole,
-        text,
-        legacyMessageId: messageId,
+        senderRole: senderRole as UserRole,
+        text: trimmed,
       });
+
+      // Audit log (metadata only)
+      await auditRepository.log({
+        action: 'MESSAGE_SENT',
+        actorUid: senderUid,
+        threadId,
+        metadata: { messageId }
+      });
+
+      // Notification
+      const notifService = new NotificationService();
+      const isPatient = senderRole === 'patient';
+      const recipientId = isPatient ? thread.doctor_id : thread.patient_id;
+      
+      // Only send if it's going to patient, for doctor we might use a different mechanism or same
+      if (!isPatient) {
+        await notifService.createNotification({
+          patientId: recipientId,
+          type: 'NEW_MESSAGE',
+          title: 'New Message',
+          shortMessage: 'You have a new message from your care team.',
+          relatedEntityId: threadId,
+          relatedEntityType: 'thread',
+          idempotencyKey: `msg_notif_${messageId}`
+        });
+      }
+
+      return { messageId, timestamp: createdAt };
     } catch (err: any) {
-      console.warn('[MessagingService] Supabase addMessage error:', err.message);
+      console.error('[MessagingService] Failed to send message:', err.message);
+      throw err;
     }
-
-
-    // Notification
-    const notifService = new NotificationService();
-    const recipientId = isPatient ? threadData.doctorId : threadData.patientId;
-    
-    // Only send if it's going to patient, for doctor we might use a different mechanism or same
-    if (!isPatient) {
-      await notifService.createNotification({
-        patientId: recipientId,
-        type: 'NEW_MESSAGE',
-        title: 'New Message',
-        shortMessage: 'You have a new message from your care team.',
-        relatedEntityId: threadId,
-        relatedEntityType: 'thread',
-        idempotencyKey: `msg_notif_${messageId}`
-      });
-    }
-
-    return { messageId, timestamp };
   }
 
   async markAsRead(threadId: string, readerUid: string, readerRole: 'patient' | 'doctor') {
-    const threadRef = db.collection('message_threads').doc(threadId);
-    
-    const timestamp = new Date().toISOString();
-    
-    await db.runTransaction(async (t) => {
-      const doc = await t.get(threadRef);
-      if (!doc.exists) return;
-      
-      const updateData: any = {};
-      if (readerRole === 'patient') {
-        updateData.patientUnreadCount = 0;
-      } else {
-        updateData.doctorUnreadCount = 0;
-      }
-      
-      t.update(threadRef, updateData);
-    });
+    try {
+      await messageRepository.markAsRead(threadId, readerUid, readerRole as UserRole);
 
-    // Bulk update unread messages in the collection
-    const unreadSnap = await threadRef.collection('messages')
-      .where('senderRole', '!=', readerRole)
-      .where('readAt', '==', null)
-      .get();
-      
-    if (!unreadSnap.empty) {
-      const batch = db.batch();
-      unreadSnap.docs.forEach(doc => {
-        batch.update(doc.ref, { readAt: timestamp });
-      });
-      await batch.commit();
-
-      await db.collection('audit_logs').add({
+      await auditRepository.log({
         action: 'MESSAGE_READ',
         actorUid: readerUid,
         threadId,
-        timestamp,
-        metadata: { count: unreadSnap.size }
       });
+    } catch (err: any) {
+      console.error('[MessagingService] Failed to mark messages read:', err.message);
+      throw err;
     }
   }
 }

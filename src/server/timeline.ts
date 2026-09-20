@@ -1,4 +1,4 @@
-import { adminDb as db } from './firebaseAdmin';
+import { orderRepository } from './repositories/orderRepository';
 
 export interface TimelineEvent {
   eventId: string;
@@ -14,16 +14,14 @@ export interface TimelineEvent {
 export class TimelineService {
   async createEvent(event: Omit<TimelineEvent, 'eventId'>) {
     const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const timestamp = event.timestamp || new Date().toISOString();
     const fullEvent: TimelineEvent = {
       ...event,
+      timestamp,
       eventId
     };
 
-    await db.collection('order_events').doc(eventId).set(fullEvent);
-
-    // Dual-write to Supabase order_events
     try {
-      const { orderRepository } = await import('./repositories/orderRepository');
       await orderRepository.createOrderEvent({
         id: eventId,
         order_id: event.orderId || '',
@@ -34,19 +32,29 @@ export class TimelineService {
         metadata: event.metadata || null,
       });
     } catch (err: any) {
-      console.warn('[TimelineService] Supabase dual-write error:', err.message);
+      console.warn('[TimelineService] Supabase event write error:', err.message);
     }
 
     return fullEvent;
-
   }
 
-  async getEventsForOrder(orderId: string) {
-    const snap = await db.collection('order_events')
-      .where('orderId', '==', orderId)
-      .orderBy('timestamp', 'desc')
-      .get();
-    
-    return snap.docs.map(doc => doc.data() as TimelineEvent);
+  async getEventsForOrder(orderId: string): Promise<TimelineEvent[]> {
+    try {
+      const dbEvents = await orderRepository.getOrderEvents(orderId);
+      return dbEvents.map(event => ({
+        eventId: event.id,
+        orderId: event.order_id,
+        consultationId: event.consultation_id || undefined,
+        eventType: event.event_type,
+        timestamp: event.created_at || '',
+        actorType: event.actor_type,
+        actorId: event.actor_id,
+        metadata: event.metadata || undefined
+      }));
+    } catch (err: any) {
+      console.error('[TimelineService] Failed to fetch events:', err.message);
+      return [];
+    }
   }
 }
+
