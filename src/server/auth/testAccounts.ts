@@ -149,8 +149,10 @@ export async function provisionDesignatedTestAccount(email: string, password: st
     user = created.user;
   } else {
     // Update existing user password and role metadata
+    // Existing test-account passwords are intentionally not rotated on every server
+    // start. This keeps the designated credentials stable without exposing them
+    // in client code or source control.
     const { data: updated, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
-      password,
       email_confirm: true,
       app_metadata: {
         ...user.app_metadata,
