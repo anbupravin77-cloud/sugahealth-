@@ -27,7 +27,7 @@ export default function Consultation() {
   const [submitted, setSubmitted] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzingStage, setAnalyzingStage] = useState(0);
-  const totalSteps = 6;
+  const totalSteps = 4;
   const shouldReduceMotion = useReducedMotion();
 
   // Doctor review / approval state
@@ -241,7 +241,9 @@ export default function Consultation() {
         return;
       }
       setErrors({});
-      setStep(2);
+      // Profile and delivery details were collected during account setup, so the
+      // consultation goes straight from care area to medical screening.
+      setStep(4);
       saveDraft();
     } else if (step === 2) {
       const newErrors: Record<string, string> = {};
@@ -283,9 +285,9 @@ export default function Consultation() {
   };
 
   const prevStep = () => {
-    if (step > 1) {
-      setStep(step - 1);
-    }
+    if (step === 4) setStep(1);
+    else if (step === 5) setStep(4);
+    else if (step === 6) setStep(5);
   };
 
   const handleSubmit = async () => {
