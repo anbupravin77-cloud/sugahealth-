@@ -276,7 +276,7 @@ export default function DoctorLogin() {
               <h3 className="text-base font-semibold text-stone-900">Credential Recovery</h3>
             </div>
             <p className="text-xs text-stone-600 leading-relaxed">
-              Provider credential resets require dual-factor administrative verification through the Suga.Health Medical Credentialing Board. Please contact your clinical administrator or support@sugahealth.com for assistance.
+              For security, provider passwords are reset by an administrator. Contact your Suga.Health administrator to restore access.
             </p>
             <button
               onClick={() => setShowForgotPasswordModal(false)}
@@ -290,7 +290,7 @@ export default function DoctorLogin() {
 
       {/* Footer */}
       <footer className="border-t border-stone-200 bg-white px-4 sm:px-8 py-3 text-center text-3xs text-stone-400">
-        Suga.Health Clinical Provider Portal • EPCS & HIPAA Security Rules Compliant • Telehealth Network
+        Suga.Health Clinical Provider Portal • Secure access for authorized clinical staff
       </footer>
     </div>
   );
