@@ -101,14 +101,14 @@ export default function ProfileSetup() {
       <header className="bg-white border-b border-neutral-200 px-5 sm:px-8 py-4">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div><div className="font-black tracking-tighter text-xl">SUGA<span className="text-neutral-400">.</span>HEALTH</div><div className="text-[10px] tracking-widest text-neutral-500">PROFILE SETUP</div></div>
-          <span className="text-xs text-neutral-500">India · Madurai first</span>
+          <span className="text-xs text-neutral-500">Serving Madurai, Tamil Nadu</span>
         </div>
       </header>
       <main className="max-w-3xl mx-auto px-4 py-8 sm:py-12">
         <div className="mb-7">
           <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-neutral-500"><UserRound size={15}/>First-time setup</span>
-          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight mt-2">Tell us the basics once.</h1>
-          <p className="text-sm text-neutral-600 mt-2 max-w-2xl">These are profile and delivery details only. We reuse them later so you do not have to enter the same information during every consultation.</p>
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight mt-2">Complete your profile</h1>
+          <p className="text-sm text-neutral-600 mt-2 max-w-2xl">Add your personal and delivery details once. We’ll reuse them during future consultations so you do not have to enter the same information again.</p>
         </div>
         <form onSubmit={handleSubmit} className="bg-white border border-neutral-200 rounded-3xl p-5 sm:p-8 space-y-7">
           {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
