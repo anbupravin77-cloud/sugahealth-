@@ -21,6 +21,9 @@ export interface DbProfile {
   last_name?: string | null;
   date_of_birth?: string | null;
   sex?: string | null;
+  height_cm?: number | null;
+  weight_kg?: number | null;
+  profile_completed_at?: string | null;
   role: UserRole;
   shipping_address?: Record<string, any> | null;
   created_at?: string;
@@ -39,6 +42,9 @@ export interface DbStaffProfile {
   initials?: string | null;
   phone_number?: string | null;
   specialties?: string[] | null;
+  accepting_new_patients?: boolean;
+  max_active_cases?: number;
+  last_assigned_at?: string | null;
   professional_address?: Record<string, any> | null;
   created_at?: string;
   updated_at?: string;

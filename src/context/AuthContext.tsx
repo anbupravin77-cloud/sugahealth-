@@ -25,6 +25,9 @@ export interface UserProfile {
   dateOfBirth?: string;
   sex?: 'male' | 'female' | 'other' | 'prefer-not-to-say' | '';
   shippingAddress?: Address;
+  heightCm?: number | null;
+  weightKg?: number | null;
+  profileCompletedAt?: string | null;
   role: UserRole;
   createdAt: string;
   updatedAt?: string;
@@ -43,6 +46,9 @@ export interface StaffProfile {
   initials?: string;
   phoneNumber?: string;
   specialties?: string[];
+  acceptingNewPatients?: boolean;
+  maxActiveCases?: number;
+  lastAssignedAt?: string | null;
   professionalAddress?: Omit<Address, 'recipientName'>;
   createdAt: string;
   updatedAt: string;
@@ -156,6 +162,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         dateOfBirth: serverProfile?.date_of_birth || '',
         sex: (serverProfile?.sex || serverProfile?.gender || '') as any,
         shippingAddress: serverProfile?.shipping_address || undefined,
+        heightCm: serverProfile?.height_cm ?? null,
+        weightKg: serverProfile?.weight_kg ?? null,
+        profileCompletedAt: serverProfile?.profile_completed_at || null,
         role: role,
         createdAt: serverProfile?.created_at || session.user.created_at || new Date().toISOString(),
       };
@@ -276,4 +285,3 @@ export function useAuth() {
   }
   return context;
 }
-

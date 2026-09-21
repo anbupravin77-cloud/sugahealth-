@@ -4,12 +4,13 @@ import { supabase } from '../../../lib/supabase';
 import { Loader2, UserPlus, Shield, CheckCircle2, Mail, Check } from 'lucide-react';
 
 const CLINICAL_SPECIALTY_OPTIONS = [
-  'Medical Weight Loss',
-  'Hair Regrowth',
-  'Sexual Health',
-  'Longevity & Performance',
-  'Primary / General Medicine'
+  { value: 'weight', label: 'Medical Weight Loss' },
+  { value: 'hair', label: 'Hair Growth' },
+  { value: 'sex', label: 'Sexual Health' },
+  { value: 'general', label: 'General / Cross-specialty' },
 ];
+
+const specialtyLabel = (value: string) => CLINICAL_SPECIALTY_OPTIONS.find(s => s.value === value)?.label || value;
 
 export function StaffTab() {
   const { user } = useAuth();
@@ -28,6 +29,11 @@ export function StaffTab() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [setupLink, setSetupLink] = useState('');
+  const [routingDoctor, setRoutingDoctor] = useState<StaffProfile | null>(null);
+  const [routingSpecialties, setRoutingSpecialties] = useState<string[]>([]);
+  const [acceptingNewPatients, setAcceptingNewPatients] = useState(true);
+  const [maxActiveCases, setMaxActiveCases] = useState('50');
+  const [savingRouting, setSavingRouting] = useState(false);
 
   const getAuthToken = async () => {
     try {
@@ -134,6 +140,49 @@ export function StaffTab() {
       fetchStaff();
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const openRoutingEditor = (doctor: StaffProfile) => {
+    setRoutingDoctor(doctor);
+    setRoutingSpecialties(doctor.specialties || []);
+    setAcceptingNewPatients(doctor.acceptingNewPatients !== false);
+    setMaxActiveCases(String(doctor.maxActiveCases || 50));
+    setError('');
+    setSuccess('');
+  };
+
+  const saveRouting = async () => {
+    if (!routingDoctor) return;
+    if (routingSpecialties.length === 0) {
+      setError('Select at least one specialty for this doctor.');
+      return;
+    }
+    const workloadCap = Number(maxActiveCases);
+    if (!Number.isInteger(workloadCap) || workloadCap < 1 || workloadCap > 500) {
+      setError('Active case limit must be between 1 and 500.');
+      return;
+    }
+
+    try {
+      setSavingRouting(true);
+      setError('');
+      const token = await getAuthToken();
+      if (!token) throw new Error('Authentication session required');
+      const res = await fetch(`/api/admin/staff/${routingDoctor.uid || routingDoctor.id}/routing`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ specialties: routingSpecialties, acceptingNewPatients, maxActiveCases: workloadCap }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to update doctor routing');
+      setRoutingDoctor(null);
+      setSuccess('Doctor routing settings updated.');
+      await fetchStaff();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update doctor routing');
+    } finally {
+      setSavingRouting(false);
     }
   };
 
@@ -250,12 +299,12 @@ export function StaffTab() {
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-white p-3 rounded-lg border border-neutral-200">
                   {CLINICAL_SPECIALTY_OPTIONS.map((spec) => {
-                    const isSelected = selectedSpecialties.includes(spec);
+                    const isSelected = selectedSpecialties.includes(spec.value);
                     return (
                       <button
-                        key={spec}
+                        key={spec.value}
                         type="button"
-                        onClick={() => toggleSpecialty(spec)}
+                        onClick={() => toggleSpecialty(spec.value)}
                         className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium text-left transition-colors ${
                           isSelected 
                             ? 'bg-neutral-900 text-white' 
@@ -267,7 +316,7 @@ export function StaffTab() {
                         }`}>
                           {isSelected && <Check size={12} strokeWidth={3} />}
                         </div>
-                        <span>{spec}</span>
+                        <span>{spec.label}</span>
                       </button>
                     );
                   })}
@@ -285,6 +334,46 @@ export function StaffTab() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {routingDoctor && (
+        <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="font-semibold text-neutral-900">Doctor Routing</h3>
+              <p className="text-xs text-neutral-500 mt-1">{routingDoctor.displayName || routingDoctor.email} · consultations are assigned by specialty, then by the lowest active workload.</p>
+            </div>
+            <button onClick={() => setRoutingDoctor(null)} className="text-xs text-neutral-500 hover:text-neutral-900">Close</button>
+          </div>
+          <div className="mt-5">
+            <label className="block text-xs font-medium text-neutral-700 mb-2">Specialties</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {CLINICAL_SPECIALTY_OPTIONS.map((spec) => {
+                const selected = routingSpecialties.includes(spec.value);
+                return (
+                  <button key={spec.value} type="button" onClick={() => setRoutingSpecialties(prev => selected ? prev.filter(v => v !== spec.value) : [...prev, spec.value])} className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium text-left transition-colors ${selected ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-700 border border-neutral-200 hover:bg-neutral-100'}`}>
+                    <div className={`w-4 h-4 rounded border flex items-center justify-center ${selected ? 'bg-white border-white text-neutral-900' : 'border-neutral-300 bg-white'}`}>{selected && <Check size={12} strokeWidth={3} />}</div>
+                    {spec.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5">
+            <label className="text-xs font-medium text-neutral-700">Active case limit
+              <input type="number" min="1" max="500" value={maxActiveCases} onChange={e => setMaxActiveCases(e.target.value)} className="mt-1.5 w-full px-3 py-2 border border-neutral-200 rounded-lg bg-white text-sm focus:outline-none focus:border-neutral-950" />
+            </label>
+            <label className="flex items-center gap-3 self-end min-h-10 px-3 py-2 rounded-lg bg-white border border-neutral-200 text-xs font-medium text-neutral-700">
+              <input type="checkbox" checked={acceptingNewPatients} onChange={e => setAcceptingNewPatients(e.target.checked)} />
+              Accept new consultations
+            </label>
+          </div>
+          <div className="mt-5 flex justify-end">
+            <button onClick={saveRouting} disabled={savingRouting} className="bg-neutral-950 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-neutral-800 disabled:opacity-50">
+              {savingRouting ? 'Saving…' : 'Save Routing'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -324,8 +413,8 @@ export function StaffTab() {
                         <span className="capitalize font-medium">{s.role}</span>
                       </div>
                       {s.specialties && s.specialties.length > 0 && (
-                        <div className="text-[10px] text-neutral-500 mt-1 max-w-xs truncate" title={s.specialties.join(', ')}>
-                          {s.specialties.join(', ')}
+                        <div className="text-[10px] text-neutral-500 mt-1 max-w-xs truncate" title={s.specialties.map(specialtyLabel).join(', ')}>
+                          {s.specialties.map(specialtyLabel).join(', ')}
                         </div>
                       )}
                     </td>
@@ -348,6 +437,11 @@ export function StaffTab() {
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
+                      {s.role === 'doctor' && (
+                        <button onClick={() => openRoutingEditor(s)} className="text-xs font-semibold px-3 py-1.5 rounded-md text-neutral-700 hover:bg-neutral-100 mr-2">
+                          Routing
+                        </button>
+                      )}
                       <button
                         onClick={() => toggleStatus(s.uid || s.id, s.active)}
                         className={`text-xs font-semibold px-3 py-1.5 rounded-md ${

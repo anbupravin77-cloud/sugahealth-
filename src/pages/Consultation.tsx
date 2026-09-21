@@ -18,7 +18,7 @@ interface MedicationOption {
 }
 
 export default function Consultation() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [draftId, setDraftId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState('');
@@ -49,7 +49,7 @@ export default function Consultation() {
     heightUnit: 'cm' as 'inches' | 'cm',
     weight: '',
     weightUnit: 'kg' as 'lbs' | 'kg',
-    sex: '' as 'male' | 'female' | 'other' | '',
+    sex: '' as 'male' | 'female' | 'other' | 'prefer-not-to-say' | '',
     conditions: [] as string[],
     medicalHistory: '',
     medications: '',
@@ -60,6 +60,22 @@ export default function Consultation() {
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Reuse verified profile details so patients do not repeatedly enter the same information.
+  useEffect(() => {
+    if (!profile) return;
+    setFormData(prev => ({
+      ...prev,
+      fullName: `${profile.firstName || ''} ${profile.lastName || ''}`.trim() || profile.displayName || prev.fullName,
+      email: profile.email || prev.email,
+      phone: profile.phoneNumber || prev.phone,
+      height: profile.heightCm ? String(profile.heightCm) : prev.height,
+      weight: profile.weightKg ? String(profile.weightKg) : prev.weight,
+      sex: (profile.sex || prev.sex) as any,
+      heightUnit: 'cm',
+      weightUnit: 'kg',
+    }));
+  }, [profile]);
 
   // Fetch token helper - strictly requires canonical Supabase access token for clinical endpoints
   const getAccessToken = async (): Promise<string | null> => {
@@ -572,7 +588,7 @@ export default function Consultation() {
                     <div className="space-y-6">
                       <div>
                         <h2 className="text-2xl font-bold text-neutral-950">Select your primary clinical focus</h2>
-                        <p className="text-xs text-neutral-500 mt-1">Our licensed physician board specializes in precision telehealth treatments.</p>
+                        <p className="text-xs text-neutral-500 mt-1">Choose the care area you want help with. We’ll route your consultation to a doctor who works in that area.</p>
                       </div>
                       <div className="space-y-3">
                         {primaryOptions.map((opt) => (
@@ -606,7 +622,7 @@ export default function Consultation() {
                     <div className="space-y-5">
                       <div>
                         <h2 className="text-2xl font-bold text-neutral-950">Personal & Contact Details</h2>
-                        <p className="text-xs text-neutral-500 mt-1">Required for legal clinical chart verification.</p>
+                        <p className="text-xs text-neutral-500 mt-1">These details come from your saved profile. You do not need to enter them again.</p><Link to="/account" className="inline-block text-xs font-semibold text-neutral-900 underline underline-offset-4 mt-2">Edit profile details</Link>
                       </div>
 
                       <div className="space-y-4">
@@ -616,8 +632,8 @@ export default function Consultation() {
                             type="text"
                             placeholder="Jane Doe"
                             value={formData.fullName}
-                            onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                            readOnly
+                            className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-700"
                           />
                           {errors.fullName && <p className="text-2xs text-rose-600 mt-1">{errors.fullName}</p>}
                         </div>
@@ -628,8 +644,8 @@ export default function Consultation() {
                             type="email"
                             placeholder="jane@example.com"
                             value={formData.email}
-                            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                            readOnly
+                            className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-700"
                           />
                           {errors.email && <p className="text-2xs text-rose-600 mt-1">{errors.email}</p>}
                         </div>
@@ -640,8 +656,8 @@ export default function Consultation() {
                             type="tel"
                             placeholder="+91 98765 43210"
                             value={formData.phone}
-                            onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                            readOnly
+                            className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-700"
                           />
                           {errors.phone && <p className="text-2xs text-rose-600 mt-1">{errors.phone}</p>}
                         </div>
@@ -671,7 +687,7 @@ export default function Consultation() {
                     <div className="space-y-5">
                       <div>
                         <h2 className="text-2xl font-bold text-neutral-950">Patient Biometrics</h2>
-                        <p className="text-xs text-neutral-500 mt-1">Calculates body mass index & appropriate dosage thresholds.</p>
+                        <p className="text-xs text-neutral-500 mt-1">These measurements come from your saved profile and are included in the consultation automatically.</p><Link to="/account" className="inline-block text-xs font-semibold text-neutral-900 underline underline-offset-4 mt-2">Edit profile details</Link>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
@@ -681,8 +697,8 @@ export default function Consultation() {
                             type="number"
                             placeholder="172"
                             value={formData.height}
-                            onChange={(e) => setFormData({ ...formData, height: e.target.value })}
-                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                            readOnly
+                            className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-700"
                           />
                           {errors.height && <p className="text-2xs text-rose-600 mt-1">{errors.height}</p>}
                         </div>
@@ -692,8 +708,8 @@ export default function Consultation() {
                             type="number"
                             placeholder="70"
                             value={formData.weight}
-                            onChange={(e) => setFormData({ ...formData, weight: e.target.value })}
-                            className="w-full rounded-xl border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none"
+                            readOnly
+                            className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm text-neutral-700"
                           />
                           {errors.weight && <p className="text-2xs text-rose-600 mt-1">{errors.weight}</p>}
                         </div>
@@ -701,20 +717,20 @@ export default function Consultation() {
 
                       <div>
                         <label className="block text-xs font-semibold text-neutral-700 mb-1">Biological Sex</label>
-                        <div className="grid grid-cols-3 gap-3">
-                          {['female', 'male', 'other'].map((sex) => (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          {['female', 'male', 'other', 'prefer-not-to-say'].map((sex) => (
                             <button
                               key={sex}
                               type="button"
-                              onClick={() => setFormData({ ...formData, sex: sex as any })}
+                              disabled
                               className={cn(
-                                'py-2.5 rounded-xl border text-xs font-semibold capitalize transition-all cursor-pointer',
+                                'py-2.5 rounded-xl border text-xs font-semibold capitalize transition-all cursor-default disabled:opacity-100',
                                 formData.sex === sex
                                   ? 'border-neutral-950 bg-neutral-950 text-white'
                                   : 'border-neutral-200 text-neutral-700 hover:bg-neutral-50'
                               )}
                             >
-                              {sex}
+                              {sex === 'prefer-not-to-say' ? 'Prefer not to say' : sex}
                             </button>
                           ))}
                         </div>
@@ -849,7 +865,7 @@ export default function Consultation() {
                     <div className="space-y-5">
                       <div>
                         <h2 className="text-2xl font-bold text-neutral-950">Review & Telehealth Consent</h2>
-                        <p className="text-xs text-neutral-500 mt-1">Review clinical terms before submitting for physician evaluation.</p>
+                        <p className="text-xs text-neutral-500 mt-1">Review the information before submitting it for doctor review.</p>
                       </div>
 
                       <div className="space-y-3">
@@ -873,7 +889,7 @@ export default function Consultation() {
                             className="mt-0.5 rounded text-neutral-950 focus:ring-neutral-950"
                           />
                           <span className="text-xs text-neutral-700">
-                            <strong>Telehealth Evaluation:</strong> I consent to receive asynchronous clinical evaluation by a licensed physician.
+                            <strong>Telehealth Evaluation:</strong> I consent to receive an asynchronous telehealth evaluation from a doctor on the Suga.Health clinical team.
                           </span>
                         </label>
 
@@ -924,12 +940,12 @@ export default function Consultation() {
                     <Loader2 className="w-5 h-5 animate-spin text-neutral-950" />
                     <div>
                       <span className="text-xs font-bold uppercase tracking-wider text-neutral-950 block">
-                        Submitting Clinical Intake
+                        Submitting Consultation
                       </span>
                       <span className="text-2xs text-neutral-500">
-                        {analyzingStage === 0 && 'Securing clinical health chart in database...'}
-                        {analyzingStage === 1 && 'Assigning state-licensed telehealth physician...'}
-                        {analyzingStage === 2 && 'Creating doctor clinical review task & notification...'}
+                        {analyzingStage === 0 && 'Saving your consultation securely...'}
+                        {analyzingStage === 1 && 'Routing your consultation to the right doctor...'}
+                        {analyzingStage === 2 && 'Notifying the assigned doctor...'}
                       </span>
                     </div>
                   </div>
@@ -947,11 +963,11 @@ export default function Consultation() {
                   </div>
                   <div className="space-y-2">
                     <span className="text-2xs font-bold uppercase tracking-widest text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
-                      Intake Received & Assigned
+                      Consultation Submitted
                     </span>
-                    <h2 className="text-2xl font-bold text-neutral-950">Your chart is in physician review</h2>
+                    <h2 className="text-2xl font-bold text-neutral-950">Your doctor will review it soon</h2>
                     <p className="text-xs text-neutral-600 max-w-md mx-auto leading-relaxed">
-                      A licensed physician has been notified and is reviewing your health records. You will receive an in-app notification and email once your clinical evaluation is approved.
+                      Your consultation has been sent to the clinical team. You’ll see an update here when the doctor completes the review.
                     </p>
                   </div>
                   <div className="p-4 rounded-2xl bg-neutral-50 border border-neutral-200 max-w-md mx-auto text-left text-xs space-y-2">
@@ -961,11 +977,7 @@ export default function Consultation() {
                     </div>
                     <div className="flex justify-between border-b border-neutral-200/60 pb-1.5">
                       <span className="text-neutral-500">Status:</span>
-                      <span className="font-semibold text-neutral-900">Physician Review Queue</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-neutral-500">Expected Response:</span>
-                      <span className="font-semibold text-neutral-900">&lt; 24 Hours</span>
+                      <span className="font-semibold text-neutral-900">Doctor review</span>
                     </div>
                   </div>
                   <Link
@@ -985,8 +997,7 @@ export default function Consultation() {
       {showPaymentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/60 backdrop-blur-xs">
           <div className="w-full max-w-md bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-2xl space-y-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mx-auto text-stone-900">
-              <Info className="w-6 h-6" />
+            <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mx-auto text-stone-900">              <Info className="w-6 h-6" />
             </div>
             <div className="space-y-1">
               <h3 className="text-lg font-bold text-neutral-950">Payment Integration</h3>

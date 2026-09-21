@@ -22,6 +22,8 @@ export default function Account() {
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [dob, setDob] = useState('');
+  const [heightCm, setHeightCm] = useState('');
+  const [weightKg, setWeightKg] = useState('');
   const [sex, setSex] = useState<'male' | 'female' | 'other' | 'prefer-not-to-say' | ''>('');
   
   // Shipping Form State
@@ -99,6 +101,8 @@ export default function Account() {
       setLastName(profile.lastName || '');
       setPhone(profile.phoneNumber || '');
       setDob(profile.dateOfBirth || '');
+      setHeightCm(profile.heightCm ? String(profile.heightCm) : '');
+      setWeightKg(profile.weightKg ? String(profile.weightKg) : '');
       setSex(profile.sex || '');
       
       if (profile.shippingAddress) {
@@ -196,7 +200,9 @@ export default function Account() {
           lastName: lastName.trim(),
           phone: normalizedPhone, // null if empty, or +91XXXXXXXXXX
           dateOfBirth: dob || null,
-          sex: sex || null
+          sex: sex || null,
+          heightCm: heightCm ? Number(heightCm) : undefined,
+          weightKg: weightKg ? Number(weightKg) : undefined
         })
       });
 
@@ -548,6 +554,17 @@ export default function Account() {
                         <option value="other">Other</option>
                         <option value="prefer-not-to-say">Prefer not to say</option>
                       </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-2">Height (cm)</label>
+                      <input type="number" min="80" max="250" value={heightCm} onChange={(e) => setHeightCm(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-2">Weight (kg)</label>
+                      <input type="number" min="20" max="400" value={weightKg} onChange={(e) => setWeightKg(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-4 py-2.5 text-sm focus:border-neutral-950 focus:outline-none" />
                     </div>
                   </div>
 

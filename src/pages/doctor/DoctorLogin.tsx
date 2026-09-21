@@ -1,6 +1,7 @@
 import React, { useState, useEffect, FormEvent } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useDoctorAuth } from '../../context/DoctorAuthContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   ShieldCheck,
   Lock,
@@ -16,6 +17,7 @@ import {
 
 export default function DoctorLogin() {
   const { isAuthenticated, login, loginWithGoogle, isLoading: authLoading } = useDoctorAuth();
+  const { profile, loading: mainAuthLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -27,13 +29,22 @@ export default function DoctorLogin() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
 
-  // If already authenticated, redirect to /doctor
+  // Route authenticated staff to the portal that matches their server-owned role.
   useEffect(() => {
-    if (!authLoading && isAuthenticated) {
-      const destination = (location.state as any)?.from?.pathname || '/doctor';
-      navigate(destination, { replace: true });
+    if (authLoading || mainAuthLoading || !profile) return;
+    if (profile.role === 'admin') {
+      navigate('/admin', { replace: true });
+      return;
     }
-  }, [isAuthenticated, authLoading, navigate, location]);
+    if (profile.role === 'pharmacist') {
+      navigate('/pharmacist', { replace: true });
+      return;
+    }
+    if (isAuthenticated && profile.role === 'doctor') {
+      const destination = (location.state as any)?.from?.pathname || '/doctor';
+      navigate(destination.startsWith('/doctor') ? destination : '/doctor', { replace: true });
+    }
+  }, [isAuthenticated, authLoading, mainAuthLoading, profile, navigate, location]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -97,7 +108,7 @@ export default function DoctorLogin() {
                 Doctor & Provider Login
               </h1>
               <p className="text-xs text-stone-500 leading-relaxed">
-                Access your clinical queue, review patient asynchronous intakes, and issue verified electronic prescriptions.
+                Access your clinical queue, review assigned consultations, manage treatment plans, and message patients securely.
               </p>
             </div>
 
@@ -149,25 +160,6 @@ export default function DoctorLogin() {
                   Or provider password
                 </span>
               </div>
-            </div>
-
-            {/* Quick Test Credentials Helper */}
-            <div className="mt-4 p-3 rounded-xl bg-emerald-50/60 border border-emerald-200/80 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold text-emerald-950">Default Doctor Test Account</p>
-                <p className="text-2xs text-emerald-700 font-mono">doctor123@gmail.com</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setEmail('doctor123@gmail.com');
-                  setPassword('123456doctor@!');
-                  setErrorMessage(null);
-                }}
-                className="px-2.5 py-1 text-2xs font-semibold rounded-md bg-white border border-emerald-300 text-emerald-900 hover:bg-emerald-50 transition-colors cursor-pointer shadow-2xs"
-              >
-                Autofill
-              </button>
             </div>
 
             {/* Login Form */}

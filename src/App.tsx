@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import Layout from './components/Layout';
 import Home from './pages/Home';
@@ -39,6 +39,17 @@ import DoctorProfile from './pages/doctor/DoctorProfile';
 import DoctorSettings from './pages/doctor/DoctorSettings';
 import AuthTest from './pages/AuthTest';
 import { isAuthTestEnabled } from './lib/authConfig';
+import ProfileSetup from './pages/ProfileSetup';
+import { useAuth } from './context/AuthContext';
+
+
+function RoleAwareHome() {
+  const { user, profile, loading } = useAuth();
+  if (!loading && user && profile?.role === 'admin') return <Navigate to="/admin" replace />;
+  if (!loading && user && profile?.role === 'doctor') return <Navigate to="/doctor" replace />;
+  if (!loading && user && profile?.role === 'pharmacist') return <Navigate to="/pharmacist" replace />;
+  return <Home />;
+}
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -58,7 +69,7 @@ export default function App() {
             <Routes>
               {/* Public Website Routes */}
               <Route path="/" element={<Layout />}>
-                <Route index element={<Home />} />
+                <Route index element={<RoleAwareHome />} />
                 <Route path="weight-loss" element={<WeightLoss />} />
                 <Route path="hair-growth" element={<HairGrowth />} />
                 <Route path="sexual-health" element={<SexualHealth />} />
@@ -94,6 +105,11 @@ export default function App() {
                 <Route path="/onboarding" element={<StaffOnboarding />} />
               </Route>
               
+              {/* First-time patient profile setup (profile completion is intentionally not required here) */}
+              <Route element={<ProtectedRoute requireProfileComplete={false} />}>
+                <Route path="/account/setup" element={<ProfileSetup />} />
+              </Route>
+
               {/* Protected Patient Account Routes */}
               <Route element={<ProtectedRoute />}>
                 <Route path="/account" element={<Account />} />

@@ -19,22 +19,22 @@ export const DEFAULT_CREDENTIAL_ACCOUNTS: DesignatedTestAccount[] = [
     defaultRole: 'admin',
     displayName: 'Suga Admin',
     envVar: 'TEST_ADMIN_EMAIL',
-    defaultPassword: process.env.TEST_ADMIN_PASSWORD || '123456admin@!',
+    defaultPassword: process.env.TEST_ADMIN_PASSWORD,
   },
   {
     email: 'patient123@gmail.com',
     defaultRole: 'patient',
     displayName: 'Test Patient',
     envVar: 'TEST_PATIENT_EMAIL',
-    defaultPassword: process.env.TEST_PATIENT_PASSWORD || '123456patient@!',
+    defaultPassword: process.env.TEST_PATIENT_PASSWORD,
   },
   {
     email: 'doctor123@gmail.com',
     defaultRole: 'doctor',
     displayName: 'Dr. Alex Smith MD',
     envVar: 'TEST_DOCTOR_EMAIL',
-    defaultPassword: process.env.TEST_DOCTOR_PASSWORD || '123456doctor@!',
-    specialties: ['General Medicine', 'Telehealth Consultation', 'Metabolic Health'],
+    defaultPassword: process.env.TEST_DOCTOR_PASSWORD,
+    specialties: ['weight', 'hair', 'sex'],
   },
 ];
 
@@ -50,7 +50,7 @@ export function getConfiguredTestAccounts(): DesignatedTestAccount[] {
     defaultRole: 'admin',
     displayName: 'Suga System Admin',
     envVar: 'TEST_ADMIN_EMAIL',
-    defaultPassword: process.env.TEST_ADMIN_PASSWORD || '123456admin@!',
+    defaultPassword: process.env.TEST_ADMIN_PASSWORD,
   });
 
   const patientEmail = (process.env.TEST_PATIENT_EMAIL || 'patient123@gmail.com').trim().toLowerCase();
@@ -59,7 +59,7 @@ export function getConfiguredTestAccounts(): DesignatedTestAccount[] {
     defaultRole: 'patient',
     displayName: 'Test Patient',
     envVar: 'TEST_PATIENT_EMAIL',
-    defaultPassword: process.env.TEST_PATIENT_PASSWORD || '123456patient@!',
+    defaultPassword: process.env.TEST_PATIENT_PASSWORD,
   });
 
   const doctorEmail = (process.env.TEST_DOCTOR_EMAIL || 'doctor123@gmail.com').trim().toLowerCase();
@@ -68,8 +68,8 @@ export function getConfiguredTestAccounts(): DesignatedTestAccount[] {
     defaultRole: 'doctor',
     displayName: 'Dr. Alex Smith MD',
     envVar: 'TEST_DOCTOR_EMAIL',
-    defaultPassword: process.env.TEST_DOCTOR_PASSWORD || '123456doctor@!',
-    specialties: ['General Medicine', 'Telehealth Consultation', 'Metabolic Health'],
+    defaultPassword: process.env.TEST_DOCTOR_PASSWORD,
+    specialties: ['weight', 'hair', 'sex'],
   });
 
   if (process.env.TEST_PHARMACIST_EMAIL && process.env.TEST_PHARMACIST_EMAIL.trim()) {
@@ -78,7 +78,7 @@ export function getConfiguredTestAccounts(): DesignatedTestAccount[] {
       defaultRole: 'pharmacist',
       displayName: 'Marcus Test RPh',
       envVar: 'TEST_PHARMACIST_EMAIL',
-      defaultPassword: process.env.TEST_PHARMACIST_PASSWORD || '123456pharmacist@!',
+      defaultPassword: process.env.TEST_PHARMACIST_PASSWORD,
     });
   }
 
@@ -198,7 +198,7 @@ export async function provisionDesignatedTestAccount(email: string, password: st
         first_name: firstName,
         last_name: lastName,
         initials,
-        specialties: spec.specialties || ['General Medicine', 'Telehealth Consultation'],
+        specialties: spec.specialties || ['general'],
         updated_at: new Date().toISOString(),
       }, { onConflict: 'id' });
 

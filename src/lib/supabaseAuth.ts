@@ -32,6 +32,7 @@ export async function signUpWithEmail(credentials: SupabaseAuthCredentials, meta
         last_name: metadata?.lastName || '',
         display_name: metadata?.displayName || `${metadata?.firstName || ''} ${metadata?.lastName || ''}`.trim() || credentials.email.split('@')[0],
       },
+      emailRedirectTo: `${window.location.origin}/login`,
     },
   });
 

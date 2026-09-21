@@ -183,7 +183,7 @@ export function ConsultationsTab() {
                                className="text-xs border border-neutral-300 rounded px-2 py-1"
                              >
                                <option value="">Select Doctor</option>
-                               {doctors.filter(d => d.specialties?.includes(c.primaryConcern)).map(d => (
+                               {doctors.filter(d => d.specialties?.includes(c.primaryConcern) || d.specialties?.includes('general')).map(d => (
                                  <option key={d.id} value={d.id}>Dr. {d.lastName || d.displayName}</option>
                                ))}
                              </select>

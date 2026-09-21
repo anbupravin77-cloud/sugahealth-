@@ -338,7 +338,13 @@ const PORT = 3000;
       const adminUid = decodedToken?.uid || 'admin';
       const timestamp = new Date().toISOString();
       const displayName = `${firstName.trim()} ${lastName.trim()}`.trim() || email;
-      const formattedSpecialties = role === 'doctor' ? (Array.isArray(specialties) ? specialties : []) : null;
+      const allowedSpecialties = new Set(['weight', 'hair', 'sex', 'general']);
+      const formattedSpecialties = role === 'doctor'
+        ? (Array.isArray(specialties) ? specialties.filter((s: any) => typeof s === 'string' && allowedSpecialties.has(s)) : [])
+        : null;
+      if (role === 'doctor' && (!formattedSpecialties || formattedSpecialties.length === 0)) {
+        return res.status(400).json({ error: 'Select at least one doctor specialty.' });
+      }
 
       let targetUid = '';
       let setupLink = '';
@@ -519,6 +525,9 @@ const PORT = 3000;
             lastName: s.last_name,
             displayName: `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.email,
             specialties: Array.isArray(s.specialties) ? s.specialties : [],
+            acceptingNewPatients: s.accepting_new_patients !== false,
+            maxActiveCases: Number(s.max_active_cases || 50),
+            lastAssignedAt: s.last_assigned_at || null,
             createdAt: s.created_at,
             updatedAt: s.updated_at,
           });
@@ -547,6 +556,9 @@ const PORT = 3000;
               lastName: p.last_name,
               displayName: p.display_name || `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email,
               specialties: [],
+              acceptingNewPatients: p.role === 'doctor',
+              maxActiveCases: 50,
+              lastAssignedAt: null,
               createdAt: p.created_at,
               updatedAt: p.updated_at,
             });
@@ -559,6 +571,62 @@ const PORT = 3000;
     } catch (err: any) {
       console.error('Error fetching staff:', err);
       res.status(500).json({ error: 'Internal server error while fetching staff directory', message: err.message });
+    }
+  });
+
+  // Doctor routing settings: specialties, availability for new consultations, and workload cap.
+  app.patch('/api/admin/staff/:uid/routing', requireAdminAuth, async (req, res) => {
+    try {
+      const { uid } = req.params;
+      const { specialties, acceptingNewPatients, maxActiveCases } = req.body;
+      const allowedSpecialties = new Set(['weight', 'hair', 'sex', 'general']);
+      const cleanSpecialties = Array.isArray(specialties)
+        ? [...new Set(specialties.filter((value: any) => typeof value === 'string' && allowedSpecialties.has(value)))]
+        : [];
+      const workloadCap = Number(maxActiveCases);
+
+      if (cleanSpecialties.length === 0) {
+        return res.status(400).json({ error: 'Select at least one doctor specialty.' });
+      }
+      if (typeof acceptingNewPatients !== 'boolean') {
+        return res.status(400).json({ error: 'acceptingNewPatients must be true or false.' });
+      }
+      if (!Number.isInteger(workloadCap) || workloadCap < 1 || workloadCap > 500) {
+        return res.status(400).json({ error: 'Active case limit must be between 1 and 500.' });
+      }
+
+      const { data: current, error: currentError } = await supabaseAdmin
+        .from('staff_profiles')
+        .select('id, role')
+        .eq('id', uid)
+        .maybeSingle();
+      if (currentError) return res.status(500).json({ error: currentError.message });
+      if (!current || current.role !== 'doctor') return res.status(404).json({ error: 'Doctor not found.' });
+
+      const timestamp = new Date().toISOString();
+      const { error: updateError } = await supabaseAdmin
+        .from('staff_profiles')
+        .update({
+          specialties: cleanSpecialties,
+          accepting_new_patients: acceptingNewPatients,
+          max_active_cases: workloadCap,
+          updated_at: timestamp,
+        })
+        .eq('id', uid);
+      if (updateError) return res.status(500).json({ error: updateError.message });
+
+      const adminUid = (req as any).user?.uid || 'admin';
+      await supabaseAdmin.from('audit_logs').insert({
+        action: 'DOCTOR_ROUTING_UPDATED',
+        actor_uid: adminUid,
+        metadata: { targetUid: uid, specialties: cleanSpecialties, acceptingNewPatients, maxActiveCases: workloadCap },
+        created_at: timestamp,
+      }).then(() => {}).catch(() => {});
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error updating doctor routing:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
     }
   });
 
@@ -929,8 +997,7 @@ const PORT = 3000;
         directions: p.directions,
         refillEligible: p.refill_count > 0,
         refillCount: p.refill_count,
-        refillIntervalDays: p.refill_interval_days,
-        treatmentCategory: consultData.primary_concern || '',
+        refillIntervalDays: p.refill_interval_days,        treatmentCategory: consultData.primary_concern || '',
         createdAt: p.created_at,
         updatedAt: p.updated_at,
         medications: p.items.map(item => ({
@@ -1929,7 +1996,6 @@ const PORT = 3000;
               actorType: 'system',
               actorId: 'system'
             });
-
             await notifService.createNotification({
               patientId: orderData.patient_id,
               type: 'PAYMENT_CONFIRMED',
@@ -2130,6 +2196,9 @@ const PORT = 3000;
           phone: profile.phone_number,
           phoneNumber: profile.phone_number,
           shippingAddress: profile.shipping_address,
+          heightCm: profile.height_cm,
+          weightKg: profile.weight_kg,
+          profileCompletedAt: profile.profile_completed_at,
           role: profile.role,
           createdAt: profile.created_at,
           updatedAt: profile.updated_at,
@@ -2158,7 +2227,7 @@ const PORT = 3000;
     try {
       const decodedToken = (req as any).user;
       const uid = decodedToken.uid;
-      const { firstName, lastName, dateOfBirth, sex, shippingAddress, phone, phoneNumber } = req.body;
+      const { firstName, lastName, dateOfBirth, sex, shippingAddress, phone, phoneNumber, heightCm, weightKg, completeProfile } = req.body;
 
       // Helper for normalizing Indian mobile numbers server-side
       const normalizePhone = (input: any): { normalized: string | null; isValid: boolean } => {
@@ -2213,6 +2282,21 @@ const PORT = 3000;
         supabaseUpdates.sex = validSexes.includes(sex) ? sex : null;
       }
 
+      if (heightCm !== undefined) {
+        const value = Number(heightCm);
+        if (!Number.isFinite(value) || value < 80 || value > 250) {
+          return res.status(400).json({ error: 'Enter a valid height between 80 and 250 cm.' });
+        }
+        supabaseUpdates.height_cm = value;
+      }
+      if (weightKg !== undefined) {
+        const value = Number(weightKg);
+        if (!Number.isFinite(value) || value < 20 || value > 400) {
+          return res.status(400).json({ error: 'Enter a valid weight between 20 and 400 kg.' });
+        }
+        supabaseUpdates.weight_kg = value;
+      }
+
       if ('phone' in req.body || 'phoneNumber' in req.body) {
         const rawPhone = phone !== undefined ? phone : phoneNumber;
         const { normalized, isValid } = normalizePhone(rawPhone);
@@ -2234,16 +2318,36 @@ const PORT = 3000;
           shippingPhone = supabaseUpdates.phone_number !== undefined ? supabaseUpdates.phone_number : null;
         }
 
+        const postalCode = String(shippingAddress.postalCode || shippingAddress.zip || '').trim();
+        if (postalCode && !/^\d{6}$/.test(postalCode)) {
+          return res.status(400).json({ error: 'Enter a valid 6-digit Indian PIN code.' });
+        }
         supabaseUpdates.shipping_address = {
           recipientName: shippingAddress.recipientName || '',
           line1: shippingAddress.line1 || shippingAddress.street || '',
           line2: shippingAddress.line2 || shippingAddress.apartment || '',
           city: shippingAddress.city || '',
           state: shippingAddress.state || '',
-          postalCode: shippingAddress.postalCode || shippingAddress.zip || '',
-          country: shippingAddress.country || 'India',
+          postalCode,
+          country: 'India',
           phoneNumber: shippingPhone,
         };
+      }
+
+      if (completeProfile === true) {
+        const current = await supabaseAdmin.from('profiles').select('*').eq('id', uid).maybeSingle();
+        const base = current.data || {};
+        const merged: any = { ...base, ...supabaseUpdates };
+        const address = merged.shipping_address || {};
+        const requiredOk = Boolean(
+          merged.first_name && merged.last_name && merged.phone_number && merged.date_of_birth && merged.sex &&
+          Number(merged.height_cm) >= 80 && Number(merged.weight_kg) >= 20 &&
+          address.recipientName && address.line1 && address.city && address.state && /^\d{6}$/.test(address.postalCode || '')
+        );
+        if (!requiredOk) {
+          return res.status(400).json({ error: 'Complete all required profile and delivery fields before continuing.' });
+        }
+        supabaseUpdates.profile_completed_at = new Date().toISOString();
       }
 
       // Check if profile exists in Supabase public.profiles
@@ -2353,6 +2457,9 @@ const PORT = 3000;
           phone: p.phone_number || null,
           phoneNumber: p.phone_number || null,
           shippingAddress: p.shipping_address || null,
+          heightCm: p.height_cm ?? null,
+          weightKg: p.weight_kg ?? null,
+          profileCompletedAt: p.profile_completed_at || null,
           role: p.role || decodedToken.role || 'patient',
           createdAt: p.created_at || new Date().toISOString(),
           updatedAt: p.updated_at || new Date().toISOString(),
@@ -2888,8 +2995,7 @@ const PORT = 3000;
         }))
       }));
       res.json({ orders });
-    } catch (err) {
-      console.error('Error fetching pharmacist orders:', err);
+    } catch (err) {      console.error('Error fetching pharmacist orders:', err);
       res.status(500).json({ error: 'Internal Error' });
     }
   });

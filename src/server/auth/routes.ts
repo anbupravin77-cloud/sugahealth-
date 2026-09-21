@@ -50,7 +50,7 @@ authRouter.get('/me', async (req: Request, res: Response): Promise<void> => {
     .eq('id', authUser.uid)
     .maybeSingle();
 
-  const completeProfile = profile || {
+  let completeProfile: any = profile || {
     id: authUser.uid,
     uid: authUser.uid,
     email: authUser.email,
@@ -60,11 +60,16 @@ authRouter.get('/me', async (req: Request, res: Response): Promise<void> => {
     last_name: authUser.supabaseUser?.user_metadata?.last_name || '',
   };
 
-  res.json({
-    success: true,
-    user: authUser,
-    profile: completeProfile,
-  });
+  if (authUser.role !== 'patient') {
+    const { data: staff } = await supabaseAdmin
+      .from('staff_profiles')
+      .select('*')
+      .eq('id', authUser.uid)
+      .maybeSingle();
+    if (staff) completeProfile = { ...completeProfile, ...staff, role: authUser.role };
+  }
+
+  res.json({ success: true, user: authUser, profile: completeProfile });
 });
 
 /**
@@ -164,42 +169,6 @@ authRouter.post('/doctor-login', async (req: Request, res: Response): Promise<vo
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const testDoctorEmail = (process.env.TEST_DOCTOR_EMAIL || 'doctor123@gmail.com').trim().toLowerCase();
-  const testDoctorPassword = process.env.TEST_DOCTOR_PASSWORD || '123456doctor@!';
-
-  // If matching configured or default TEST_DOCTOR credentials, ensure provisioned and sign in
-  if (normalizedEmail === testDoctorEmail && password === testDoctorPassword) {
-    try {
-      // Ensure provisioned in Supabase Auth
-      await provisionDesignatedTestAccount(testDoctorEmail, testDoctorPassword);
-
-      // Sign in with Supabase to generate valid JWT session
-      const { data, error } = await supabaseAdmin.auth.signInWithPassword({
-        email: testDoctorEmail,
-        password: testDoctorPassword,
-      });
-
-      if (error || !data.session) {
-        throw new Error(error?.message || 'Failed to authenticate test doctor');
-      }
-
-      res.json({
-        success: true,
-        session: data.session,
-        user: {
-          id: data.user.id,
-          email: data.user.email,
-          role: 'doctor',
-        },
-      });
-      return;
-    } catch (err: any) {
-      console.error('[AuthRoutes] doctor-login error:', err.message);
-      res.status(500).json({ error: err.message || 'Failed to authenticate doctor' });
-      return;
-    }
-  }
-
   // Otherwise, attempt standard Supabase password authentication
   try {
     const { data, error } = await supabaseAdmin.auth.signInWithPassword({
