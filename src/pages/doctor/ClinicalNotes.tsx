@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
 import { Loader2, Save, FileText, CheckCircle2 } from 'lucide-react';
 
 interface ClinicalNotesProps {
@@ -13,12 +14,17 @@ export function ClinicalNotes({ consultationId }: ClinicalNotesProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  const getAuthToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  };
   
   useEffect(() => {
     async function fetchNotes() {
       if (!user) return;
       try {
-        const token = await user.getIdToken();
+        const token = await getAuthToken();
         const res = await fetch(`/api/consultations/${consultationId}/notes`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
@@ -44,7 +50,7 @@ export function ClinicalNotes({ consultationId }: ClinicalNotesProps) {
     setSavedSuccess(false);
     
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
       const res = await fetch(`/api/consultations/${consultationId}/notes`, {
         method: 'POST',
         headers: {

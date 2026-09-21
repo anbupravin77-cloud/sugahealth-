@@ -92,6 +92,7 @@ import {
   requirePharmacistAuth,
   requireStaffAuth,
 } from './src/server/auth';
+import { ensureDefaultTestAccounts } from './src/server/auth/testAccounts';
 
 
 import { config, validateProductionConfig } from './src/server/config';
@@ -3064,6 +3065,9 @@ const PORT = 3000;
           app.use(vite.middlewares);
           app.listen(PORT, '0.0.0.0', () => {
             console.log(`Suga.health full-stack server running on http://0.0.0.0:${PORT}`);
+            ensureDefaultTestAccounts().catch((err) => {
+              console.warn('[Server] Notice during ensureDefaultTestAccounts:', err);
+            });
           });
         })
         .catch((err) => {
@@ -3077,6 +3081,9 @@ const PORT = 3000;
       });
       app.listen(PORT, '0.0.0.0', () => {
         console.log(`Suga.health full-stack server running on http://0.0.0.0:${PORT}`);
+        ensureDefaultTestAccounts().catch((err) => {
+          console.warn('[Server] Notice during ensureDefaultTestAccounts:', err);
+        });
       });
     }
   }

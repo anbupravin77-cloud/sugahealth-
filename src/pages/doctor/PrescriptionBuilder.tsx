@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
 import { Loader2, Plus, Trash2, Pill, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface PrescriptionBuilderProps {
@@ -48,12 +49,16 @@ export function PrescriptionBuilder({ consultationId }: PrescriptionBuilderProps
   const [refillIntervalDays, setRefillIntervalDays] = useState(30);
   const [treatmentCategory, setTreatmentCategory] = useState('');
 
+  const getAuthToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  };
 
   useEffect(() => {
     async function fetchPrescription() {
       if (!user) return;
       try {
-        const token = await user.getIdToken();
+        const token = await getAuthToken();
         const res = await fetch(`/api/consultations/${consultationId}/prescription`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
@@ -97,7 +102,7 @@ export function PrescriptionBuilder({ consultationId }: PrescriptionBuilderProps
     setSavedSuccess(false);
     
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
       const res = await fetch(`/api/consultations/${consultationId}/prescription`, {
         method: 'POST',
         headers: {
@@ -139,7 +144,7 @@ export function PrescriptionBuilder({ consultationId }: PrescriptionBuilderProps
 
     setFinalizing(true);
     try {
-      const token = await user.getIdToken();
+      const token = await getAuthToken();
       // Auto-save first
       await fetch(`/api/consultations/${consultationId}/prescription`, {
         method: 'POST',

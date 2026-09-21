@@ -22,11 +22,6 @@ export default function DoctorReview() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.access_token) return session.access_token;
     } catch {}
-    if (user && typeof (user as any).getIdToken === 'function') {
-      try {
-        return await (user as any).getIdToken();
-      } catch {}
-    }
     return null;
   };
 

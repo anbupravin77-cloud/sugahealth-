@@ -151,6 +151,25 @@ export default function DoctorLogin() {
               </div>
             </div>
 
+            {/* Quick Test Credentials Helper */}
+            <div className="mt-4 p-3 rounded-xl bg-emerald-50/60 border border-emerald-200/80 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-emerald-950">Default Doctor Test Account</p>
+                <p className="text-2xs text-emerald-700 font-mono">doctor123@gmail.com</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail('doctor123@gmail.com');
+                  setPassword('123456doctor@!');
+                  setErrorMessage(null);
+                }}
+                className="px-2.5 py-1 text-2xs font-semibold rounded-md bg-white border border-emerald-300 text-emerald-900 hover:bg-emerald-50 transition-colors cursor-pointer shadow-2xs"
+              >
+                Autofill
+              </button>
+            </div>
+
             {/* Login Form */}
             <form onSubmit={handleSubmit} className="mt-4 space-y-4">
               {/* Email Field */}
