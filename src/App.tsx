@@ -130,7 +130,7 @@ export default function App() {
               </Route>
 
               {/* Catch-all fallback */}
-              <Route path="*" element={<Home />} />
+              <Route path="*" element={<RoleAwareHome />} />
             </Routes>
           </ContentProvider>
         </DoctorAuthProvider>
