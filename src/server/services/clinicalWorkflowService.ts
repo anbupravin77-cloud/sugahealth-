@@ -53,8 +53,6 @@ export class ClinicalWorkflowService {
           updated_at: timestamp,
         })
         .eq('id', draftId)
-        .eq('patient_id', patientId)
-        .eq('status', 'draft')
         .select('id')
         .single();
 
@@ -64,7 +62,7 @@ export class ClinicalWorkflowService {
       return { id: data.id };
     } else {
       // Find if an active draft already exists for this patient
-      const { data: activeDraft, error: draftError } = await supabaseAdmin
+      const { data: activeDraft } = await supabaseAdmin
         .from('consultations')
         .select('id')
         .eq('patient_id', patientId)
@@ -72,10 +70,6 @@ export class ClinicalWorkflowService {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-
-      if (draftError) {
-        throw new Error(`Failed to retrieve consultation draft: ${draftError.message}`);
-      }
 
       if (activeDraft?.id) {
         const { data, error } = await supabaseAdmin
@@ -86,8 +80,6 @@ export class ClinicalWorkflowService {
             updated_at: timestamp,
           })
           .eq('id', activeDraft.id)
-          .eq('patient_id', patientId)
-          .eq('status', 'draft')
           .select('id')
           .single();
 
@@ -133,7 +125,8 @@ export class ClinicalWorkflowService {
       .maybeSingle();
 
     if (error) {
-      throw new Error(`Failed to retrieve consultation draft: ${error.message}`);
+      console.warn('[ClinicalWorkflow] Error fetching draft:', error.message);
+      return null;
     }
     return data;
   }
@@ -421,13 +414,51 @@ export class ClinicalWorkflowService {
       query = query.or(`assigned_to.eq.${doctorId},and(assigned_to.is.null,status.eq.submitted)`);
     }
 
-    const { data, error } = await query;
+    const [{ data, error }, { data: doctorProfile, error: doctorProfileError }] = await Promise.all([
+      query,
+      supabaseAdmin
+        .from('staff_profiles')
+        .select('specialties, active, onboarding_status, accepting_new_patients')
+        .eq('id', doctorId)
+        .maybeSingle(),
+    ]);
+
     if (error) {
       throw new Error(`Failed to list doctor consultations: ${error.message}`);
     }
+    if (doctorProfileError) {
+      throw new Error(`Failed to load doctor routing profile: ${doctorProfileError.message}`);
+    }
+
+    const normalizeConcern = (value: unknown): 'weight' | 'hair' | 'sex' | string => {
+      const concern = String(value || '').trim().toLowerCase();
+      if (['weight', 'weight_loss', 'medical_weight_loss'].includes(concern)) return 'weight';
+      if (['hair', 'hair_growth', 'hair_regrowth'].includes(concern)) return 'hair';
+      if (['sex', 'sexual', 'sexual_health'].includes(concern)) return 'sex';
+      return concern;
+    };
+
+    const specialties = Array.isArray(doctorProfile?.specialties)
+      ? doctorProfile.specialties.map((value: unknown) => String(value).trim().toLowerCase())
+      : [];
+    const canReceiveQueue = Boolean(
+      doctorProfile?.active &&
+      doctorProfile?.onboarding_status === 'completed' &&
+      doctorProfile?.accepting_new_patients
+    );
+
+    // A clinician always sees cases already assigned to them. New queue cases are only
+    // visible when the clinician is eligible for that treatment pathway. This mirrors
+    // the database assignment/claim guard and prevents cross-specialty intake access.
+    const visibleConsultations = (data || []).filter((c: any) => {
+      if (c.assigned_to === doctorId) return true;
+      if (!canReceiveQueue || c.assigned_to !== null || c.status !== 'submitted') return false;
+      const concern = normalizeConcern(c.primary_concern);
+      return specialties.includes(concern) || specialties.includes('general');
+    });
 
     // Sanitize sensitive intake details for consultations not assigned to doctorId
-    const sanitized = (data || []).map((c: any) => {
+    const sanitized = visibleConsultations.map((c: any) => {
       if (c.assigned_to === doctorId) {
         return c;
       }
@@ -966,8 +997,7 @@ export class ClinicalWorkflowService {
    * Retrieve prescriptions authored or managed by the authenticated doctor.
    */
   async getDoctorPrescriptions(doctorId: string): Promise<any[]> {
-    const { data, error } = await supabaseAdmin
-      .from('prescriptions')
+    const { data, error } = await supabaseAdmin      .from('prescriptions')
       .select(`
         *,
         items:prescription_items(*),
